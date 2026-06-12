@@ -8,8 +8,12 @@ if [ ! -f "$CONFIG" ]; then
   echo "Error: ~/.claude/session-migrate.yml not found. Copy config.yml.template and fill it in." >&2
   exit 1
 fi
+if [ $# -lt 1 ]; then
+  echo "Usage: session-config <key>" >&2
+  exit 1
+fi
 key="$1"
-value=$(grep "^${key}:" "$CONFIG" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/[[:space:]]*#.*//' | tr -d '"'"'" )
+value=$(grep "^${key}:" "$CONFIG" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/ #.*//' | tr -d '"'"'" )
 if [ -z "$value" ]; then
   echo "Error: key '$key' not found in $CONFIG" >&2
   exit 1

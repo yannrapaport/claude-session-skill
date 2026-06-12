@@ -18,12 +18,10 @@ assert_eq() {
   fi
 }
 
-export -f assert_eq
-
 echo "=== session skill tests ==="
-source "$SCRIPT_DIR/test_encode_path.sh"
-source "$SCRIPT_DIR/test_registry.sh"
-source "$SCRIPT_DIR/test_detect_id.sh"
+for f in "$SCRIPT_DIR"/test_*.sh; do
+  [ -f "$f" ] && source "$f"
+done
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
