@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Delete sessions older than 30 days from hub sessions/ and registry.json.
+# Called automatically by session:migrate.
+set -euo pipefail
+
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+SESSIONS_DIR="$HUB_DIR/sessions"
+REGISTRY="$HUB_DIR/registry.json"
+
+[ ! -d "$SESSIONS_DIR" ] && exit 0
+
+DELETED=0
+while IFS= read -r filepath; do
+  id=$(basename "$filepath" .jsonl)
+  rm "$filepath"
+  python3 - "$id" "$REGISTRY" << 'PYEOF'
+import json, sys, os
+session_id, registry_path = sys.argv[1], sys.argv[2]
+if not os.path.exists(registry_path): sys.exit(0)
+data = json.load(open(registry_path))
+data.get("sessions", {}).pop(session_id, None)
+json.dump(data, open(registry_path, "w"), indent=2)
+PYEOF
+  echo "Cleaned up old session: $id"
+  DELETED=$((DELETED+1))
+done < <(find "$SESSIONS_DIR" -name "*.jsonl" -mtime +30 2>/dev/null)
+
+[ "$DELETED" -gt 0 ] && echo "$DELETED old session(s) removed."
+exit 0
