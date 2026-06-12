@@ -48,18 +48,30 @@ fi
 
 # ── 3. Create config ──────────────────────────────────────────────────────────
 
+NEED_CONFIG_EDIT=false
+
 if [ -f "$CONFIG" ] && [ "${1:-}" != "--force" ]; then
   echo "✓  Config already exists at $CONFIG"
 else
-  echo ""
-  echo "Configure this machine (Enter to accept defaults):"
-  echo ""
-  read -rp "  Hub URL (private git repo for sessions): " hub
   machine_default=$(hostname -s 2>/dev/null || echo "my-machine")
-  read -rp "  Machine name [$machine_default]: " machine_input
-  machine="${machine_input:-$machine_default}"
-  read -rp "  Home path [$HOME]: " home_input
-  home="${home_input:-$HOME}"
+
+  if [ -t 0 ]; then
+    # Interactive terminal — prompt for values
+    echo ""
+    echo "Configure this machine (Enter to accept defaults):"
+    echo ""
+    read -rp "  Hub URL (private git repo for sessions): " hub
+    read -rp "  Machine name [$machine_default]: " machine_input
+    machine="${machine_input:-$machine_default}"
+    read -rp "  Home path [$HOME]: " home_input
+    home="${home_input:-$HOME}"
+  else
+    # Non-interactive (curl | bash) — write placeholders, ask user to edit
+    hub="EDIT_ME"
+    machine="$machine_default"
+    home="$HOME"
+    NEED_CONFIG_EDIT=true
+  fi
 
   mkdir -p "$(dirname "$CONFIG")"
   cat > "$CONFIG" << EOF
@@ -77,5 +89,11 @@ echo "✓  Installation complete."
 echo ""
 echo "Next steps:"
 echo "  1. source $PROFILE   (or open a new terminal)"
-echo "  2. session-config hub          # verify config reads correctly"
+if [ "$NEED_CONFIG_EDIT" = true ]; then
+  echo "  2. Edit $CONFIG — set your hub URL:"
+  echo "       hub: https://github.com/your-user/claude-sessions.git"
+  echo "       machine: $(hostname -s 2>/dev/null || echo "my-machine")"
+else
+  echo "  2. session-config hub          # verify config reads correctly"
+fi
 echo "  3. /session:migrate <target>   # from Claude Code"
