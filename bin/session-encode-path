@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# session-encode-path — Encode absolute paths to Claude Code project directory names
+# Usage: session-encode-path <absolute-path>
+# Replaces all non-alphanumeric characters with "-".
+# Matches how Claude Code names ~/.claude/projects/ directories.
+set -euo pipefail
+
+if [ -z "${1:-}" ]; then
+  echo "Usage: session-encode-path <absolute-path>" >&2
+  exit 1
+fi
+
+echo "${1}" | sed 's/[^a-zA-Z0-9]/-/g'
