@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Usage: session-config <key>
+# Reads ~/.claude/session-migrate.yml
+# Supported keys: hub, machine, home
+set -euo pipefail
+CONFIG="${CONFIG:-$HOME/.claude/session-migrate.yml}"
+if [ ! -f "$CONFIG" ]; then
+  echo "Error: ~/.claude/session-migrate.yml not found. Copy config.yml.template and fill it in." >&2
+  exit 1
+fi
+key="$1"
+value=$(grep "^${key}:" "$CONFIG" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/[[:space:]]*#.*//' | tr -d '"'"'" )
+if [ -z "$value" ]; then
+  echo "Error: key '$key' not found in $CONFIG" >&2
+  exit 1
+fi
+echo "$value"

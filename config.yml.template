@@ -1,0 +1,7 @@
+# ~/.claude/session-migrate.yml
+# Copy to ~/.claude/session-migrate.yml and fill in your values.
+# Never commit this file — it is local to each machine.
+
+hub: git@github.com:youruser/claude-sessions.git   # URL of the private hub repo
+machine: mac                                        # name of this machine
+home: /Users/youruser                               # absolute home path on this machine
