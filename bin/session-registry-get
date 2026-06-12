@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Usage: session-registry-get <session-id>
+# Prints JSON object for the session, or "{}" if not found.
+# Respects HUB_DIR_OVERRIDE env var for tests.
+set -euo pipefail
+SESSION_ID="$1"
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+REGISTRY="$HUB_DIR/registry.json"
+python3 - "$SESSION_ID" "$REGISTRY" << 'PYEOF'
+import json, sys, os
+session_id, registry_path = sys.argv[1], sys.argv[2]
+if not os.path.exists(registry_path):
+    print("{}")
+    sys.exit(0)
+data = json.load(open(registry_path))
+session = data.get("sessions", {}).get(session_id, {})
+print(json.dumps(session))
+PYEOF

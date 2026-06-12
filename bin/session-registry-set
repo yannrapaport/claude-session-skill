@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Usage: session-registry-set <session-id> <machine> <project-relative>
+# Respects HUB_DIR_OVERRIDE env var for tests.
+set -euo pipefail
+SESSION_ID="$1"
+MACHINE="$2"
+PROJECT_RELATIVE="$3"
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+REGISTRY="$HUB_DIR/registry.json"
+python3 - "$SESSION_ID" "$MACHINE" "$PROJECT_RELATIVE" "$REGISTRY" << 'PYEOF'
+import json, sys, os
+from datetime import datetime, timezone
+session_id, machine, project_relative, registry_path = sys.argv[1:]
+data = {"sessions": {}}
+if os.path.exists(registry_path):
+    data = json.load(open(registry_path))
+data.setdefault("sessions", {})[session_id] = {
+    "project_relative": project_relative,
+    "current_machine": machine,
+    "migrated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+}
+json.dump(data, open(registry_path, "w"), indent=2)
+PYEOF
