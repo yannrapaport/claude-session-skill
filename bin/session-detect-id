@@ -15,7 +15,7 @@ if [ ! -d "$DIR" ]; then
   exit 1
 fi
 
-LATEST=$(ls -t "$DIR"/*.jsonl 2>/dev/null | head -1)
+LATEST=$(ls -t "$DIR"/*.jsonl 2>/dev/null | head -1 || true)
 if [ -z "$LATEST" ]; then
   echo "Error: no .jsonl files found in $DIR" >&2
   exit 1
