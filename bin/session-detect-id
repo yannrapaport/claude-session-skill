@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Usage: session-detect-id [project-path]
+# Finds the most recently modified .jsonl in ~/.claude/projects/<encoded-cwd>/
+# Respects CLAUDE_DIR env var (default: ~/.claude) — used in tests.
+set -euo pipefail
+
+PROJECT="${1:-$(pwd)}"
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+ENCODED=$(session-encode-path "$PROJECT")
+DIR="$CLAUDE_DIR/projects/$ENCODED"
+
+if [ ! -d "$DIR" ]; then
+  echo "Error: no session directory found for $PROJECT" >&2
+  echo "Expected: $DIR" >&2
+  exit 1
+fi
+
+LATEST=$(ls -t "$DIR"/*.jsonl 2>/dev/null | head -1)
+if [ -z "$LATEST" ]; then
+  echo "Error: no .jsonl files found in $DIR" >&2
+  exit 1
+fi
+
+basename "$LATEST" .jsonl
