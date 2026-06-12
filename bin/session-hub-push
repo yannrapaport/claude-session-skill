@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Commit all changes in hub and push.
+# Usage: session-hub-push "commit message"
+set -euo pipefail
+MSG="${1:-"session hub update"}"
+HUB_DIR="$HOME/.claude/session-hub"
+git -C "$HUB_DIR" add -A
+# Exit cleanly if nothing to commit
+git -C "$HUB_DIR" diff --cached --quiet && exit 0
+git -C "$HUB_DIR" commit -m "$MSG"
+git -C "$HUB_DIR" push origin HEAD

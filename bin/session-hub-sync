@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Clone hub if not present; pull if already cloned.
+# Hub URL read from ~/.claude/session-migrate.yml
+set -euo pipefail
+HUB_URL=$(session-config hub)
+HUB_DIR="$HOME/.claude/session-hub"
+if [ ! -d "$HUB_DIR/.git" ]; then
+  echo "Cloning session hub..."
+  git clone "$HUB_URL" "$HUB_DIR"
+  mkdir -p "$HUB_DIR/sessions"
+else
+  git -C "$HUB_DIR" pull --rebase --autostash origin main 2>/dev/null || \
+    git -C "$HUB_DIR" pull --rebase --autostash origin master 2>/dev/null || \
+    echo "Warning: hub pull failed — working with local copy" >&2
+fi
+# Ensure sessions directory exists
+mkdir -p "$HUB_DIR/sessions"
