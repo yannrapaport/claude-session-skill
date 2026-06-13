@@ -29,9 +29,11 @@ BIN_DIR="$INSTALL_DIR/bin"
 
 # ── 2b. Register as Claude Code plugin ───────────────────────────────────────
 
+rm -rf "$PLUGIN_CACHE"
 mkdir -p "$PLUGIN_CACHE"
 cp -r "$INSTALL_DIR/plugins/session/." "$PLUGIN_CACHE/"
 ln -sfn "$INSTALL_DIR" "$PLUGIN_MARKETPLACE"
+echo "✓  Plugin files copied to cache"
 
 PLUGINS_DIR="$HOME/.claude/plugins"
 NOW=$(python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z'))")
