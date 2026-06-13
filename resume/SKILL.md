@@ -1,3 +1,12 @@
+---
+name: session:resume
+description: Resume a migrated Claude Code session on this machine — hub pull, JSONL install, git pull, checkpoint display, then claude --resume.
+argument-hint: "[session-id]"
+allowed-tools:
+  - Bash
+  - Read
+---
+
 # session:resume
 
 Resume a migrated Claude Code session on this machine. Handles hub pull, JSONL install, git pull, checkpoint display, and launching `claude --resume`.

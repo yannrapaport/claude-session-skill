@@ -1,3 +1,11 @@
+---
+name: session:save
+description: Save a checkpoint of the current work session into the project repo — travels with the code via git, available after git pull on any machine. Replaces /ai-brain:save for non-ai-brain projects.
+allowed-tools:
+  - Bash
+  - Read
+---
+
 # session:save
 
 Save a checkpoint of the current work session into the project repo.

@@ -1,3 +1,12 @@
+---
+name: session:migrate
+description: Migrate the current Claude Code session to another machine via the session hub — pushes JSONL + updates registry.
+argument-hint: "<target-machine>"
+allowed-tools:
+  - Bash
+  - Read
+---
+
 # session:migrate
 
 Migrate the current Claude Code session to another machine via the session hub.

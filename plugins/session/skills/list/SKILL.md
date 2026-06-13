@@ -1,3 +1,10 @@
+---
+name: session:list
+description: List all sessions in the hub registry and their current machine location.
+allowed-tools:
+  - Bash
+---
+
 # session:list
 
 List all sessions in the hub registry and their current machine location.
