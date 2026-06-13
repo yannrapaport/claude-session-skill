@@ -12,6 +12,8 @@ set -euo pipefail
 REPO="https://github.com/yannrapaport/claude-session-skill.git"
 INSTALL_DIR="$HOME/.claude/skills/session"
 CONFIG="$HOME/.claude/session-migrate.yml"
+PLUGIN_CACHE="$HOME/.claude/plugins/cache/claude-session-skill/session/1.0.0"
+PLUGIN_MARKETPLACE="$HOME/.claude/plugins/marketplaces/claude-session-skill"
 
 # ── 1. Install / update skill files ──────────────────────────────────────────
 
@@ -25,7 +27,40 @@ fi
 
 BIN_DIR="$INSTALL_DIR/bin"
 
-# ── 2. Add bin/ to PATH ───────────────────────────────────────────────────────
+# ── 2b. Register as Claude Code plugin ───────────────────────────────────────
+
+mkdir -p "$HOME/.claude/plugins/cache/claude-session-skill/session"
+ln -sfn "$INSTALL_DIR/plugins/session" "$PLUGIN_CACHE"
+ln -sfn "$INSTALL_DIR" "$PLUGIN_MARKETPLACE"
+
+PLUGINS_DIR="$HOME/.claude/plugins"
+NOW=$(python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z'))")
+
+python3 - "$PLUGINS_DIR" "$NOW" << 'PYEOF'
+import json, sys, os
+plugins_dir, now = sys.argv[1], sys.argv[2]
+
+km_path = os.path.join(plugins_dir, "known_marketplaces.json")
+km = json.load(open(km_path)) if os.path.exists(km_path) else {}
+km["claude-session-skill"] = {
+    "source": {"source": "github", "repo": "yannrapaport/claude-session-skill"},
+    "installLocation": os.path.join(os.path.expanduser("~"), ".claude/plugins/marketplaces/claude-session-skill"),
+    "lastUpdated": now
+}
+json.dump(km, open(km_path, "w"), indent=2)
+
+ip_path = os.path.join(plugins_dir, "installed_plugins.json")
+ip = json.load(open(ip_path)) if os.path.exists(ip_path) else {"version": 2, "plugins": {}}
+cache_path = os.path.join(os.path.expanduser("~"), ".claude/plugins/cache/claude-session-skill/session/1.0.0")
+ip.setdefault("plugins", {})["session@claude-session-skill"] = [{
+    "scope": "user", "installPath": cache_path,
+    "version": "1.0.0", "installedAt": now, "lastUpdated": now
+}]
+json.dump(ip, open(ip_path, "w"), indent=2)
+print("✓  Registered as Claude Code plugin (session@claude-session-skill)")
+PYEOF
+
+# ── 3. Add bin/ to PATH ───────────────────────────────────────────────────────
 
 PROFILE=""
 for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
@@ -46,7 +81,7 @@ else
   echo "   $PATH_ENTRY"
 fi
 
-# ── 3. Create config ──────────────────────────────────────────────────────────
+# ── 4. Create config ──────────────────────────────────────────────────────────
 
 NEED_CONFIG_EDIT=false
 

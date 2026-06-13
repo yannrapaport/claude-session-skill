@@ -1,0 +1,11 @@
+{
+  "name": "claude-session-skill",
+  "owner": { "name": "Yann Rapaport" },
+  "metadata": {
+    "description": "Claude Code session migration skill — move sessions between machines via a git hub",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    { "name": "session", "source": "./plugins/session" }
+  ]
+}

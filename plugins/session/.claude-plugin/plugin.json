@@ -1,0 +1,8 @@
+{
+  "name": "session",
+  "version": "1.0.0",
+  "description": "Migrate Claude Code sessions between machines via a private git hub",
+  "author": {
+    "name": "Yann Rapaport"
+  }
+}
