@@ -29,8 +29,8 @@ BIN_DIR="$INSTALL_DIR/bin"
 
 # ── 2b. Register as Claude Code plugin ───────────────────────────────────────
 
-mkdir -p "$HOME/.claude/plugins/cache/claude-session-skill/session"
-ln -sfn "$INSTALL_DIR/plugins/session" "$PLUGIN_CACHE"
+mkdir -p "$PLUGIN_CACHE"
+cp -r "$INSTALL_DIR/plugins/session/." "$PLUGIN_CACHE/"
 ln -sfn "$INSTALL_DIR" "$PLUGIN_MARKETPLACE"
 
 PLUGINS_DIR="$HOME/.claude/plugins"
