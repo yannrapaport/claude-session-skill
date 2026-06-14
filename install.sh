@@ -59,7 +59,16 @@ ip.setdefault("plugins", {})["session@claude-session-skill"] = [{
     "version": "1.0.0", "installedAt": now, "lastUpdated": now
 }]
 json.dump(ip, open(ip_path, "w"), indent=2)
-print("✓  Registered as Claude Code plugin (session@claude-session-skill)")
+
+# Enable the plugin in settings.json — this is what actually loads it at startup
+settings_path = os.path.join(os.path.expanduser("~"), ".claude/settings.json")
+settings = json.load(open(settings_path)) if os.path.exists(settings_path) else {}
+settings.setdefault("enabledPlugins", {})["session@claude-session-skill"] = True
+settings.setdefault("extraKnownMarketplaces", {})["claude-session-skill"] = {
+    "source": {"source": "github", "repo": "yannrapaport/claude-session-skill"}
+}
+json.dump(settings, open(settings_path, "w"), indent=2)
+print("✓  Registered + enabled Claude Code plugin (session@claude-session-skill)")
 PYEOF
 
 # ── 3. Add bin/ to PATH ───────────────────────────────────────────────────────
