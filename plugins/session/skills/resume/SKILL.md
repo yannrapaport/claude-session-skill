@@ -1,7 +1,7 @@
 ---
 name: session:resume
-description: Resume a migrated Claude Code session on this machine — hub pull, JSONL install, git pull, checkpoint display, then claude --resume.
-argument-hint: "[session-id]"
+description: Resume any session from the index on this machine — pulls the JSONL over ssh if it lives on another machine, then claude --resume.
+argument-hint: "[session-id-or-prefix]"
 allowed-tools:
   - Bash
   - Read
@@ -9,88 +9,78 @@ allowed-tools:
 
 # session:resume
 
-Resume a migrated Claude Code session on this machine. Handles hub pull, JSONL install, git pull, checkpoint display, and launching `claude --resume`.
+Resume a session from the global index. If the transcript already lives on this
+machine, resume directly. If it lives on another machine, pull it over ssh first.
 
 ## Prerequisites
-- `~/.claude/session-migrate.yml` configured on this machine.
-- Helper scripts in `~/.claude/skills/session/bin/` are in `$PATH`.
+- `~/.claude/session-migrate.yml` has `machine`, `home`, and `peer_<other-machine>`
+  ssh targets configured.
+- `bin/` helpers are on `$PATH`.
 
 ## Usage
-/session:resume [session-id]
+/session:resume [session-id-or-prefix]
 
-If `session-id` is omitted, the skill lists available sessions and asks the user to choose.
+Omit the argument to pick from the list.
 
 ## Steps
 
-### 1. Read config
-```bash
-THIS_MACHINE=$(session-config machine)
-HOME_DIR=$(session-config home)
-```
-
-### 2. Sync hub
+### 1. Sync and resolve
 ```bash
 session-hub-sync
+THIS=$(session-config machine)
+HOME_DIR=$(session-config home)
 ```
-
-### 3. Resolve session ID
-If the user provided a session-id as argument, use it directly.
-
-If not, list sessions available on this machine:
+If no argument was given, run `sessions` and ask the user which id to resume
+(full id or unique prefix). Expand a prefix to a full id with:
 ```bash
-python3 - "$THIS_MACHINE" "$HOME/.claude/session-hub/registry.json" << 'PYEOF'
-import json, sys, os
-machine, registry_path = sys.argv[1], sys.argv[2]
-if not os.path.exists(registry_path):
-    print("No sessions found in hub registry.")
-    sys.exit(0)
-data = json.load(open(registry_path))
-sessions = [(sid, s) for sid, s in data.get("sessions", {}).items()
-            if s.get("current_machine") == machine]
-if not sessions:
-    print(f"No sessions registered for machine '{machine}'.")
-    sys.exit(0)
-for sid, s in sessions:
-    print(f"  {sid[:8]}...  {s['project_relative']}  (migrated {s['migrated_at'][:10]})")
-PYEOF
+SID=$(session-index-view | python3 -c "import json,sys; \
+  rows=json.load(sys.stdin); p='<prefix>'; \
+  m=[r['id'] for r in rows if r['id'].startswith(p)]; \
+  print(m[0] if len(m)==1 else '')")
 ```
-Ask the user which session to resume (they can provide the full ID or the first 8 characters).
+If `$SID` is empty, the prefix was ambiguous or unknown — show `sessions` and stop.
 
-### 4. Get session info from registry
+### 2. Look up the session
 ```bash
-INFO=$(session-registry-get "<session-id>")
-PROJECT_RELATIVE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['project_relative'])")
+INFO=$(session-registry-get "$SID")
+[ "$INFO" = "{}" ] && { echo "Unknown session id."; exit 1; }
+OWNER=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin)['machine'])")
+PROJECT_RELATIVE=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin)['project_relative'])")
+REMOTE_CWD=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin).get('cwd',''))")
 PROJECT_PATH="$HOME_DIR/$PROJECT_RELATIVE"
+LOCAL_ENCODED=$(session-encode-path "$PROJECT_PATH")
+LOCAL_JSONL="$HOME/.claude/projects/$LOCAL_ENCODED/$SID.jsonl"
 ```
 
-### 5. Pull project repo
+### 3. Ensure the JSONL is local
+If `$LOCAL_JSONL` already exists, skip to step 4. Otherwise pull it from the owner:
 ```bash
-git -C "$PROJECT_PATH" pull
+PEER=$(session-config "peer_$OWNER")
+# Remote path: encode the owner's absolute cwd; fall back to project_relative if cwd is blank (legacy).
+if [ -n "$REMOTE_CWD" ]; then
+  REMOTE_ENCODED=$(session-encode-path "$REMOTE_CWD")
+else
+  REMOTE_ENCODED=$(ssh "$PEER" "ls -d .claude/projects/*$PROJECT_RELATIVE* 2>/dev/null | head -1 | xargs basename")
+fi
+mkdir -p "$HOME/.claude/projects/$LOCAL_ENCODED"
+rsync -az "$PEER:.claude/projects/$REMOTE_ENCODED/$SID.jsonl" "$LOCAL_JSONL"
 ```
-If this fails, warn and continue: "git pull failed — the project may be out of date."
+If rsync fails: "Could not reach $OWNER ($PEER). It must be up and on the network to resume a session that lives there." Then stop.
 
-### 6. Install JSONL locally
+### 4. Pull the project repo
 ```bash
-ENCODED=$(session-encode-path "$PROJECT_PATH")
-mkdir -p "$HOME/.claude/projects/$ENCODED"
-cp "$HOME/.claude/session-hub/sessions/<session-id>.jsonl" \
-   "$HOME/.claude/projects/$ENCODED/<session-id>.jsonl"
+git -C "$PROJECT_PATH" pull --ff-only 2>&1 | tail -1 || echo "git pull skipped/failed — project may be stale."
 ```
 
-### 7. Check for checkpoint
-```bash
-CHECKPOINT=$(ls "$PROJECT_PATH/scratchpad/checkpoints/<session-id>"-*.md 2>/dev/null | sort | tail -1)
-```
-If a checkpoint exists, display its full contents so the user has context before the session resumes. Say: "Found checkpoint — displaying before resuming:"
+### 5. Show the latest checkpoint, if any
+Checkpoints now live in the ai-brain vault (semantic) — point the user at them
+rather than auto-loading: tell them they can run `/ai-brain:restore` for the
+matching project if they want the work summary. Do not block resume on this.
 
-### 8. Update registry to reflect this machine
-```bash
-session-registry-set "<session-id>" "$THIS_MACHINE" "$PROJECT_RELATIVE"
-session-hub-push "resume: <session-id> on $THIS_MACHINE"
-```
-
-### 9. Launch session
+### 6. Launch
 ```bash
 cd "$PROJECT_PATH"
-claude --resume <session-id>
+claude --resume "$SID"
 ```
+The next scheduled index scan on this machine will record the session locally;
+no manual registry update is needed.
