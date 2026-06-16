@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Usage: session-registry-migrate
+# Converts a v1 registry ({sessions:{sid:{project_relative,current_machine,migrated_at}}})
+# into v2 ({version:2,machines:{<machine>:{sid:{...}}}}). Idempotent. Respects HUB_DIR_OVERRIDE.
+set -euo pipefail
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+REGISTRY="$HUB_DIR/registry.json"
+[ -f "$REGISTRY" ] || { echo "No registry to migrate."; exit 0; }
+python3 - "$REGISTRY" << 'PYEOF'
+import json, os, sys
+path = sys.argv[1]
+data = json.load(open(path))
+if data.get("version") == 2 and "machines" in data:
+    print("Already v2 — nothing to do."); sys.exit(0)
+out = {"version": 2, "machines": {}}
+for sid, e in data.get("sessions", {}).items():
+    machine = e.get("current_machine", "unknown")
+    out["machines"].setdefault(machine, {})[sid] = {
+        "project_relative": e.get("project_relative", ""),
+        "cwd": "",  # unknown for legacy entries; resume will fall back to project_relative+home
+        "last_activity": e.get("migrated_at", ""),
+        "subject": "",
+        "status": "active",
+    }
+import tempfile
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+    json.dump(out, fh, indent=2)
+os.replace(tmp, path)
+print(f"Migrated {sum(len(v) for v in out['machines'].values())} session(s) to v2.")
+PYEOF
