@@ -50,6 +50,16 @@ session-index-scan
 GONE=$(python3 -c "import json;d=json.load(open('$REG'));print('sid-aaa' in d['machines'].get('mac',{}))")
 assert_eq "scan prunes purged session" "False" "$GONE"
 
+# Home-dir session (cwd == home) relativizes to "".
+HENC=$(session-encode-path "$TMP/home")
+mkdir -p "$CLAUDE_DIR/projects/$HENC"
+cat > "$CLAUDE_DIR/projects/$HENC/sid-home.jsonl" << EOF
+{"type":"user","cwd":"$TMP/home","message":{"role":"user","content":"home session"}}
+EOF
+session-index-scan
+HREL=$(python3 -c "import json;print(repr(json.load(open('$REG'))['machines']['mac']['sid-home']['project_relative']))")
+assert_eq "scan relativizes home-dir cwd to empty" "''" "$HREL"
+
 rm -rf "$TMP"
 unset CLAUDE_DIR HUB_DIR_OVERRIDE
 export PATH="$_SAVED_PATH"; unset _SAVED_PATH

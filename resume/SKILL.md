@@ -47,7 +47,14 @@ INFO=$(session-registry-get "$SID")
 OWNER=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin)['machine'])")
 PROJECT_RELATIVE=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin)['project_relative'])")
 REMOTE_CWD=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin).get('cwd',''))")
-PROJECT_PATH="$HOME_DIR/$PROJECT_RELATIVE"
+# Build this machine's project path. If we own the session, its cwd IS local — use it directly.
+if [ "$OWNER" = "$THIS" ] && [ -n "$REMOTE_CWD" ]; then
+  PROJECT_PATH="$REMOTE_CWD"
+elif [ -z "$PROJECT_RELATIVE" ]; then
+  PROJECT_PATH="$HOME_DIR"
+else
+  PROJECT_PATH="$HOME_DIR/$PROJECT_RELATIVE"
+fi
 LOCAL_ENCODED=$(session-encode-path "$PROJECT_PATH")
 LOCAL_JSONL="$HOME/.claude/projects/$LOCAL_ENCODED/$SID.jsonl"
 ```
