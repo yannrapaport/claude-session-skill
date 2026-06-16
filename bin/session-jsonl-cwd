@@ -2,7 +2,7 @@
 # Usage: session-jsonl-cwd <jsonl-path>
 # Prints the first 'cwd' value found in a Claude Code transcript, or empty string.
 set -euo pipefail
-F="$1"
+F="${1:-}"
 [ -f "$F" ] || { echo ""; exit 0; }
 python3 - "$F" << 'PYEOF'
 import json, sys
@@ -12,7 +12,7 @@ for line in open(sys.argv[1], errors="ignore"):
     try: o = json.loads(line)
     except Exception: continue
     cwd = o.get("cwd")
-    if cwd:
+    if cwd is not None:
         print(cwd); break
 else:
     print("")
