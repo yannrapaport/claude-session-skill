@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# session-index-scan — scan THIS machine's transcripts and upsert its registry subtree.
+# - Walks $CLAUDE_DIR/projects/*/*.jsonl (CLAUDE_DIR defaults to ~/.claude).
+# - For each: project_relative (cwd minus home), cwd, last_activity (mtime), subject.
+# - Preserves existing 'status' (so archived stays archived).
+# - Prunes entries under this machine whose jsonl no longer exists.
+# - Commits + pushes the hub (skipped if session-hub-push is a no-op stub).
+set -euo pipefail
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+REGISTRY="$HUB_DIR/registry.json"
+MACHINE=$(session-config machine)
+HOME_DIR=$(session-config home)
+mkdir -p "$HUB_DIR"
+
+# Build a TSV of live sessions: sid \t cwd \t mtime \t subject
+TSV=$(mktemp)
+trap 'rm -f "$TSV"' EXIT
+shopt -s nullglob
+for f in "$CLAUDE_DIR"/projects/*/*.jsonl; do
+  sid=$(basename "$f" .jsonl)
+  cwd=$(session-jsonl-cwd "$f")
+  [ -z "$cwd" ] && continue   # cannot place a session with no recorded cwd
+  mtime=$(python3 - "$f" <<'PY'
+import os, datetime, sys
+print(datetime.datetime.fromtimestamp(os.path.getmtime(sys.argv[1]), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+PY
+)
+  subj=$(session-subject "$f")
+  subj="${subj//$'\t'/ }"
+  printf '%s\t%s\t%s\t%s\n' "$sid" "$cwd" "$mtime" "$subj" >> "$TSV"
+done
+
+python3 - "$REGISTRY" "$MACHINE" "$HOME_DIR" "$TSV" << 'PYEOF'
+import json, os, sys
+registry, machine, home, tsv = sys.argv[1:5]
+data = {"version": 2, "machines": {}}
+if os.path.exists(registry):
+    try: data = json.load(open(registry))
+    except Exception: pass
+data.setdefault("version", 2)
+machines = data.setdefault("machines", {})
+prev = machines.get(machine, {})
+new = {}
+seen = set()
+home_pref = home.rstrip("/") + "/"
+for raw in open(tsv):
+    parts = raw.rstrip("\n").split("\t")
+    if len(parts) < 3: continue
+    sid, cwd, mtime = parts[0], parts[1], parts[2]
+    subj = parts[3] if len(parts) > 3 else ""
+    seen.add(sid)
+    rel = cwd[len(home_pref):] if cwd.startswith(home_pref) else cwd
+    p = prev.get(sid, {})
+    new[sid] = {
+        "project_relative": rel,
+        "cwd": cwd,
+        "last_activity": mtime,
+        "subject": subj or p.get("subject", ""),
+        "status": p.get("status", "active"),
+    }
+machines[machine] = new   # entries not in `seen` are dropped => pruning
+# atomic write
+import tempfile
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(registry) or ".", suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+    json.dump(data, fh, indent=2)
+os.replace(tmp, registry)
+print(f"Indexed {len(new)} session(s) for {machine}.")
+PYEOF
+session-hub-push "index: $MACHINE $(date -u +%Y-%m-%dT%H:%MZ)" || true
