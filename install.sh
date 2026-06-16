@@ -128,6 +128,23 @@ EOF
   echo "✓  Config written to $CONFIG"
 fi
 
+# ── Sessions consolidation: migrate registry + schedule jobs ─────────────────
+if [ -f "$HOME/.claude/session-migrate.yml" ]; then
+  PATH="$BIN_DIR:$PATH" session-hub-sync || true
+  PATH="$BIN_DIR:$PATH" session-registry-migrate || true
+  case "$(uname -s)" in
+    Darwin)
+      for u in index gc-process gc-sessions; do
+        cp "$INSTALL_DIR/units/com.yann.session-$u.plist" "$HOME/Library/LaunchAgents/" 2>/dev/null || true
+        launchctl unload "$HOME/Library/LaunchAgents/com.yann.session-$u.plist" 2>/dev/null || true
+        launchctl load "$HOME/Library/LaunchAgents/com.yann.session-$u.plist" 2>/dev/null || true
+      done
+      echo "✓  launchd jobs installed (index + GC)" ;;
+    Linux)
+      echo "ℹ️  On Linux, install cron jobs: (crontab -l 2>/dev/null; cat $INSTALL_DIR/units/crontab.nexus) | crontab -" ;;
+  esac
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 
 echo ""
