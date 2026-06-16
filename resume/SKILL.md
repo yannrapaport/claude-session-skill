@@ -56,7 +56,7 @@ else
   PROJECT_PATH="$HOME_DIR/$PROJECT_RELATIVE"
 fi
 LOCAL_ENCODED=$(session-encode-path "$PROJECT_PATH")
-LOCAL_JSONL="$HOME/.claude/projects/$LOCAL_ENCODED/$SID.jsonl"
+LOCAL_JSONL="$HOME_DIR/.claude/projects/$LOCAL_ENCODED/$SID.jsonl"
 ```
 
 ### 3. Ensure the JSONL is local
@@ -69,7 +69,7 @@ if [ -n "$REMOTE_CWD" ]; then
 else
   REMOTE_ENCODED=$(ssh "$PEER" "ls -d .claude/projects/*$PROJECT_RELATIVE* 2>/dev/null | head -1 | xargs basename")
 fi
-mkdir -p "$HOME/.claude/projects/$LOCAL_ENCODED"
+mkdir -p "$HOME_DIR/.claude/projects/$LOCAL_ENCODED"
 rsync -az "$PEER:.claude/projects/$REMOTE_ENCODED/$SID.jsonl" "$LOCAL_JSONL"
 ```
 If rsync fails: "Could not reach $OWNER ($PEER). It must be up and on the network to resume a session that lives there." Then stop.

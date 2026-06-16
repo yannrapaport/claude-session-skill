@@ -3,7 +3,7 @@
 # Hub URL read from ~/.claude/session-migrate.yml
 set -euo pipefail
 HUB_URL=$(session-config hub)
-HUB_DIR="$HOME/.claude/session-hub"
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 if [ ! -d "$HUB_DIR/.git" ]; then
   echo "Cloning session hub..."
   git clone "$HUB_URL" "$HUB_DIR"
