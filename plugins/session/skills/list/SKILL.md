@@ -1,38 +1,29 @@
 ---
 name: session:list
-description: List all sessions in the hub registry and their current machine location.
+description: List all sessions across every machine (the global cross-machine view), newest first.
 allowed-tools:
   - Bash
 ---
 
 # session:list
 
-List all sessions in the hub registry and their current machine location.
+Show every Claude Code session known to the hub index — both machines, unified —
+newest first. This is the tool to run after a reboot to see what to resume.
 
 ## Steps
 
-### 1. Sync hub
+### 1. Show the table
 ```bash
-session-hub-sync
+sessions
 ```
 
-### 2. Read and display registry
+### 2. Optional filters
+- By project (matches the cwd-scope slug): `sessions --project <slug>`
+- Active only (hide archived): `sessions --active`
+- One machine: `sessions --machine <name>`
+
+The index is auto-populated by a scheduled job on each machine; no manual
+migration is needed. To force a refresh of this machine's entries first:
 ```bash
-python3 - "$(session-config machine)" "$HOME/.claude/session-hub/registry.json" << 'PYEOF'
-import json, sys, os
-this_machine, registry_path = sys.argv[1], sys.argv[2]
-if not os.path.exists(registry_path):
-    print("Registry is empty — no sessions have been migrated yet.")
-    sys.exit(0)
-data = json.load(open(registry_path))
-sessions = data.get("sessions", {})
-if not sessions:
-    print("No sessions in registry.")
-    sys.exit(0)
-print(f"{'Session ID':<40} {'Project':<30} {'Machine':<12} {'Date'}")
-print("-" * 95)
-for sid, s in sorted(sessions.items(), key=lambda x: x[1].get("migrated_at",""), reverse=True):
-    marker = " ◀ here" if s.get("current_machine") == this_machine else ""
-    print(f"{sid:<40} {s.get('project_relative','?'):<30} {s.get('current_machine','?'):<12} {s.get('migrated_at','?')[:10]}{marker}")
-PYEOF
+session-index-scan
 ```

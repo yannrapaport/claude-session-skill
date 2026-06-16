@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# session-gc-process — kill idle/orphan `claude` processes to free RAM.
+# Conservative: targets only detached `claude` CLI processes (no controlling tty)
+# whose elapsed time exceeds the idle threshold, and never the caller's own tree.
+# Dry-run unless --kill is passed. Threshold from gc_process_idle_hours (default 6).
+set -euo pipefail
+KILL=0; [ "${1:-}" = "--kill" ] && KILL=1
+IDLE_HOURS=$(session-config gc_process_idle_hours 2>/dev/null || echo 6)
+SELF=$$
+# Fields: pid, ppid, tty, etime (formatted: [[DD-]HH:]MM:SS), command
+# pipefail: ps may get SIGPIPE when python exits early (nothing to reap); that's fine.
+{ ps -axo pid=,ppid=,tty=,etime=,command= || true; } | python3 - "$IDLE_HOURS" "$SELF" "$KILL" << 'PYEOF'
+import os, sys, signal, re
+
+def parse_etime(s):
+    """Parse ps etime format [[DD-]HH:]MM:SS -> seconds."""
+    s = s.strip()
+    days = 0
+    if '-' in s:
+        day_part, s = s.split('-', 1)
+        try: days = int(day_part)
+        except ValueError: return 0
+    parts = s.split(':')
+    try:
+        if len(parts) == 3:
+            return days * 86400 + int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        elif len(parts) == 2:
+            return days * 86400 + int(parts[0]) * 60 + int(parts[1])
+        else:
+            return days * 86400 + int(parts[0])
+    except ValueError:
+        return 0
+
+idle_h = float(sys.argv[1]); self_pid = int(sys.argv[2]); do_kill = sys.argv[3] == "1"
+threshold = idle_h * 3600
+victims = []
+for line in sys.stdin:
+    parts = line.split(None, 4)
+    if len(parts) < 5: continue
+    pid, ppid, tty, etime, cmd = parts
+    try: pid = int(pid)
+    except ValueError: continue
+    if pid == self_pid: continue
+    # Only the claude CLI, not Claude.app helpers / chrome-native-host / this tmux.
+    base = cmd.strip()
+    if not (base == "claude" or base.startswith("claude ")): continue
+    # Detached only: no controlling tty (tty column is '?' or '??').
+    if tty not in ("?", "??", "-"): continue
+    etimes = parse_etime(etime)
+    if etimes < threshold: continue
+    victims.append((pid, etimes, base[:60]))
+if not victims:
+    print("GC process: nothing to reap."); sys.exit(0)
+for pid, et, base in victims:
+    hrs = et / 3600
+    if do_kill:
+        try: os.kill(pid, signal.SIGTERM); print(f"  killed pid {pid} (idle {hrs:.1f}h): {base}")
+        except ProcessLookupError: pass
+    else:
+        print(f"  would kill pid {pid} (idle {hrs:.1f}h): {base}")
+print(f"GC process: {len(victims)} target(s){' killed' if do_kill else ' (dry-run, pass --kill)'}.")
+PYEOF

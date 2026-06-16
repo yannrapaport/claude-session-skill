@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# sessions — human-facing table of all sessions across machines.
+# Passes flags through to session-index-view: --project <s>, --machine <m>, --active.
+set -euo pipefail
+session-hub-sync >/dev/null 2>&1 || true
+THIS=$(session-config machine 2>/dev/null || echo "")
+_TMP=$(mktemp)
+trap 'rm -f "$_TMP"' EXIT
+session-index-view "$@" > "$_TMP"
+python3 - "$THIS" "$_TMP" << 'PYEOF'
+import json, sys
+this = sys.argv[1]
+with open(sys.argv[2]) as f:
+    rows = json.load(f)
+if not rows:
+    print("No sessions in index. Run session-index-scan (or wait for the scheduled job)."); sys.exit(0)
+print(f"{'Date':<11} {'Machine':<8} {'St':<4} {'Project':<26} {'Subject'}")
+print("-" * 90)
+for r in rows:
+    date = (r.get("last_activity") or "")[:10]
+    mach = r.get("machine","?")
+    here = "*" if mach == this else " "
+    st = "arch" if r.get("status") == "archived" else "act"
+    proj = (r.get("project_relative") or "?")[:26]
+    subj = (r.get("subject") or "")[:48]
+    extra = ("+"+",".join(r["also_on"])) if r.get("also_on") else ""
+    print(f"{date:<11} {mach:<7}{here} {st:<4} {proj:<26} {subj} {extra}")
+print()
+print(f"  * = this machine ({this}).  Resume: /session:resume <id-prefix>")
+PYEOF

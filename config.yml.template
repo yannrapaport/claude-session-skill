@@ -3,5 +3,16 @@
 # Never commit this file — it is local to each machine.
 
 hub: git@github.com:youruser/claude-sessions.git   # URL of the private hub repo
-machine: mac                                        # name of this machine
-home: /Users/youruser                               # absolute home path on this machine
+machine: mac                                        # name of THIS machine
+home: /Users/youruser                               # absolute home path on THIS machine
+
+# ssh/rsync targets for every OTHER machine, keyed peer_<machine-name>.
+# Used by session:resume to pull a JSONL that lives on another machine.
+# Value is anything ssh accepts (host alias, user@host, Tailscale MagicDNS name).
+peer_nexus: yann@nexus
+peer_mac: yann@the-product-guy
+
+# Garbage collection tunables (hours / days). Omit to use the defaults shown.
+gc_process_idle_hours: 6     # kill spare/orphan claude processes idle longer than this
+gc_archive_days: 10          # archive sessions inactive longer than this
+gc_purge_days: 0             # delete archived JSONL after this many days (0 = never)

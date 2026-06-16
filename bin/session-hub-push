@@ -3,7 +3,7 @@
 # Usage: session-hub-push "commit message"
 set -euo pipefail
 MSG="${1:-"session hub update"}"
-HUB_DIR="$HOME/.claude/session-hub"
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 git -C "$HUB_DIR" add -A
 # Exit cleanly if nothing to commit
 git -C "$HUB_DIR" diff --cached --quiet && exit 0
