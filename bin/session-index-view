@@ -2,7 +2,7 @@
 # session-index-view — print merged session list as a JSON array, newest first.
 # One row per session-id (deduped across machines, keeping the most-recently-active).
 # Each row: {id, machine, project_relative, cwd, last_activity, subject, status, also_on:[...]}.
-# Respects HUB_DIR_OVERRIDE. Filters: --project <rel-substr>, --machine <m>, --active.
+# Respects HUB_DIR_OVERRIDE. Filters: --project <rel-substr> (substring), --machine <m> (exact), --active.
 set -euo pipefail
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 REGISTRY="$HUB_DIR/registry.json"
@@ -14,13 +14,23 @@ f_project = f_machine = None; f_active = False
 i = 0
 while i < len(args):
     a = args[i]
-    if a == "--project": f_project = args[i+1]; i += 2
-    elif a == "--machine": f_machine = args[i+1]; i += 2
+    if a == "--project":
+        if i + 1 >= len(args):
+            print(f"error: {a} requires a value", file=sys.stderr); sys.exit(1)
+        f_project = args[i+1]; i += 2
+    elif a == "--machine":
+        if i + 1 >= len(args):
+            print(f"error: {a} requires a value", file=sys.stderr); sys.exit(1)
+        f_machine = args[i+1]; i += 2
     elif a == "--active": f_active = True; i += 1
     else: i += 1
 if not os.path.exists(registry):
     print("[]"); sys.exit(0)
-data = json.load(open(registry))
+try:
+    with open(registry) as f:
+        data = json.load(f)
+except json.JSONDecodeError as e:
+    print(f"error: malformed registry: {e}", file=sys.stderr); sys.exit(1)
 best = {}
 for machine, sessions in data.get("machines", {}).items():
     for sid, e in sessions.items():

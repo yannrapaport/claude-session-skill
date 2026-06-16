@@ -19,4 +19,28 @@ assert_eq "view picks latest-activity machine" "nexus" "$S1M"
 # Sorted newest-first: first row is s2.
 FIRST=$(echo "$OUT" | python3 -c "import json,sys;print(json.load(sys.stdin)[0]['id'])")
 assert_eq "view sorts newest first" "s2" "$FIRST"
+# --project substring filter: projects/foo matches s1 only (s2 is projects/bar).
+NP=$(session-index-view --project projects/foo | python3 -c "import json,sys;print(len(json.load(sys.stdin)))")
+assert_eq "view --project filter" "1" "$NP"
+# --machine mac filter: after dedup, s1.machine=nexus, s2.machine=mac → 1 row.
+NM=$(session-index-view --machine mac | python3 -c "import json,sys;print(len(json.load(sys.stdin)))")
+assert_eq "view --machine filter" "1" "$NM"
+# --active filter: both s1 and s2 have status=active → 2 rows.
+NA=$(session-index-view --active | python3 -c "import json,sys;print(len(json.load(sys.stdin)))")
+assert_eq "view --active filter" "2" "$NA"
+# 3 machines: dedups to one row; most-recent wins; also_on lists the other two.
+cat > "$TMP/registry.json" << 'EOF'
+{ "version": 2, "machines": {
+  "mac":   { "x": {"project_relative":"p","cwd":"/m/p","last_activity":"2026-01-01T00:00:00Z","subject":"s","status":"active"} },
+  "nexus": { "x": {"project_relative":"p","cwd":"/n/p","last_activity":"2026-03-01T00:00:00Z","subject":"s","status":"active"} },
+  "pi":    { "x": {"project_relative":"p","cwd":"/p/p","last_activity":"2026-02-01T00:00:00Z","subject":"s","status":"active"} }
+} }
+EOF
+OUT3=$(session-index-view)
+N3=$(echo "$OUT3" | python3 -c "import json,sys;print(len(json.load(sys.stdin)))")
+assert_eq "view 3-machine dedups to one row" "1" "$N3"
+M3=$(echo "$OUT3" | python3 -c "import json,sys;print(json.load(sys.stdin)[0]['machine'])")
+assert_eq "view 3-machine picks most recent" "nexus" "$M3"
+ALSO3=$(echo "$OUT3" | python3 -c "import json,sys;print(','.join(json.load(sys.stdin)[0]['also_on']))")
+assert_eq "view 3-machine also_on lists others" "mac,pi" "$ALSO3"
 rm -rf "$TMP"; unset HUB_DIR_OVERRIDE
