@@ -10,6 +10,8 @@ REGISTRY="$HUB_DIR/registry.json"
 MACHINE=$(session-config machine)
 ARCHIVE_DAYS=$(session-config gc_archive_days 2>/dev/null || echo 10)
 PURGE_DAYS=$(session-config gc_purge_days 2>/dev/null || echo 0)
+[[ "$ARCHIVE_DAYS" =~ ^[0-9]+$ ]] || ARCHIVE_DAYS=10
+[[ "$PURGE_DAYS" =~ ^[0-9]+$ ]] || PURGE_DAYS=0
 [ -f "$REGISTRY" ] || { echo "GC sessions: no registry."; exit 0; }
 
 # Phase A: decide archive candidates (status active, too old). Print ids to checkpoint.
@@ -29,35 +31,57 @@ for sid, e in data.get("machines", {}).get(machine, {}).items():
 PYEOF
 )
 
-CHECKPOINT="${GC_CHECKPOINT_CMD:-echo '  (checkpoint hook not wired; set GC_CHECKPOINT_CMD)'}"
+CHECKPOINT="${GC_CHECKPOINT_CMD:-}"
+if [ -z "$CHECKPOINT" ] && [ -n "$CANDIDATES" ]; then
+  echo "GC sessions: WARNING — GC_CHECKPOINT_CMD not set; archiving WITHOUT a semantic checkpoint." >&2
+fi
 ARCHIVED=0
 for sid in $CANDIDATES; do
-  eval "$CHECKPOINT" >/dev/null 2>&1 || true   # checkpoint BEFORE archiving
-  python3 - "$REGISTRY" "$MACHINE" "$sid" << 'PYEOF'
-import json, sys
-registry, machine, sid = sys.argv[1:4]
-data = json.load(open(registry))
-data["machines"][machine][sid]["status"] = "archived"
-json.dump(data, open(registry, "w"), indent=2)
-PYEOF
+  if [ -n "$CHECKPOINT" ]; then
+    # checkpoint BEFORE any archive flip; the session id is available to the hook as $GC_SID
+    GC_SID="$sid" eval "$CHECKPOINT" >/dev/null 2>&1 || true
+  fi
   echo "  archived $sid"
   ARCHIVED=$((ARCHIVED+1))
 done
+if [ "$ARCHIVED" -gt 0 ]; then
+  python3 - "$REGISTRY" "$MACHINE" $CANDIDATES << 'PYEOF'
+import json, os, sys, tempfile
+registry, machine = sys.argv[1], sys.argv[2]
+sids = sys.argv[3:]
+data = json.load(open(registry))
+m = data.get("machines", {}).get(machine, {})
+for sid in sids:
+    if sid in m:
+        m[sid]["status"] = "archived"
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(registry) or ".", suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+    json.dump(data, fh, indent=2)
+os.replace(tmp, registry)
+PYEOF
+fi
 
 # Phase B: optional purge of archived local JSONL older than PURGE_DAYS.
 PURGED=0
 if [ "$PURGE_DAYS" -gt 0 ]; then
   CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
-  while IFS= read -r sid; do
+  while IFS=$'\t' read -r sid cwd; do
     [ -z "$sid" ] && continue
-    cwd=$(session-registry-get "$sid" | python3 -c "import json,sys;print(json.load(sys.stdin).get('cwd',''))")
     [ -z "$cwd" ] && continue
     enc=$(session-encode-path "$cwd")
     f="$CLAUDE_DIR/projects/$enc/$sid.jsonl"
     if [ -f "$f" ] && [ -n "$(find "$f" -mtime +"$PURGE_DAYS" 2>/dev/null)" ]; then
       rm "$f"; echo "  purged jsonl $sid"; PURGED=$((PURGED+1))
     fi
-  done < <(python3 -c "import json;d=json.load(open('$REGISTRY'));print('\n'.join(s for s,e in d['machines'].get('$MACHINE',{}).items() if e.get('status')=='archived'))")
+  done < <(python3 - "$REGISTRY" "$MACHINE" << 'PYEOF'
+import json, sys
+registry, machine = sys.argv[1], sys.argv[2]
+data = json.load(open(registry))
+for sid, e in data.get("machines", {}).get(machine, {}).items():
+    if e.get("status") == "archived" and e.get("cwd"):
+        print(f"{sid}\t{e['cwd']}")
+PYEOF
+)
 fi
 
 echo "GC sessions: $ARCHIVED archived, $PURGED purged."
