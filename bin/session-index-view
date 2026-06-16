@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# session-index-view — print merged session list as a JSON array, newest first.
+# One row per session-id (deduped across machines, keeping the most-recently-active).
+# Each row: {id, machine, project_relative, cwd, last_activity, subject, status, also_on:[...]}.
+# Respects HUB_DIR_OVERRIDE. Filters: --project <rel-substr>, --machine <m>, --active.
+set -euo pipefail
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+REGISTRY="$HUB_DIR/registry.json"
+python3 - "$REGISTRY" "$@" << 'PYEOF'
+import json, os, sys
+registry = sys.argv[1]
+args = sys.argv[2:]
+f_project = f_machine = None; f_active = False
+i = 0
+while i < len(args):
+    a = args[i]
+    if a == "--project": f_project = args[i+1]; i += 2
+    elif a == "--machine": f_machine = args[i+1]; i += 2
+    elif a == "--active": f_active = True; i += 1
+    else: i += 1
+if not os.path.exists(registry):
+    print("[]"); sys.exit(0)
+data = json.load(open(registry))
+best = {}
+for machine, sessions in data.get("machines", {}).items():
+    for sid, e in sessions.items():
+        row = dict(e); row["id"] = sid; row["machine"] = machine
+        cur = best.get(sid)
+        if cur is None or row.get("last_activity","") > cur.get("last_activity",""):
+            also = set(cur.get("also_on", [])) if cur else set()
+            if cur: also.add(cur["machine"])
+            row["also_on"] = sorted(also)
+            best[sid] = row
+        else:
+            cur.setdefault("also_on", [])
+            if machine not in cur["also_on"]:
+                cur["also_on"] = sorted(set(cur["also_on"]) | {machine})
+rows = list(best.values())
+if f_project: rows = [r for r in rows if f_project in r.get("project_relative","")]
+if f_machine: rows = [r for r in rows if r.get("machine") == f_machine]
+if f_active:  rows = [r for r in rows if r.get("status") == "active"]
+rows.sort(key=lambda r: r.get("last_activity",""), reverse=True)
+print(json.dumps(rows, indent=2))
+PYEOF
