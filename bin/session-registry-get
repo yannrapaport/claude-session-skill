@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
 # Usage: session-registry-get <session-id>
-# Prints JSON object for the session, or "{}" if not found.
-# Respects HUB_DIR_OVERRIDE env var for tests.
+# Searches machines.*.<sid>; prints the entry with an added "machine" field,
+# or "{}" if not found. If present on >1 machine, returns the most-recently-active.
+# Respects HUB_DIR_OVERRIDE.
 set -euo pipefail
-SESSION_ID="$1"
+SID="$1"
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 REGISTRY="$HUB_DIR/registry.json"
-python3 - "$SESSION_ID" "$REGISTRY" << 'PYEOF'
+python3 - "$SID" "$REGISTRY" << 'PYEOF'
 import json, sys, os
-session_id, registry_path = sys.argv[1], sys.argv[2]
-if not os.path.exists(registry_path):
-    print("{}")
-    sys.exit(0)
-data = json.load(open(registry_path))
-session = data.get("sessions", {}).get(session_id, {})
-print(json.dumps(session))
+sid, path = sys.argv[1], sys.argv[2]
+if not os.path.exists(path):
+    print("{}"); sys.exit(0)
+try:
+    data = json.load(open(path))
+except Exception:
+    print("{}"); sys.exit(0)
+hits = []
+for machine, sessions in data.get("machines", {}).items():
+    if sid in sessions:
+        e = dict(sessions[sid]); e["machine"] = machine; hits.append(e)
+if not hits:
+    print("{}"); sys.exit(0)
+hits.sort(key=lambda e: e.get("last_activity", ""), reverse=True)
+print(json.dumps(hits[0]))
 PYEOF
