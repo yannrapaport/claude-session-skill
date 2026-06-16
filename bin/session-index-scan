@@ -12,6 +12,9 @@ REGISTRY="$HUB_DIR/registry.json"
 MACHINE=$(session-config machine)
 HOME_DIR=$(session-config home)
 mkdir -p "$HUB_DIR"
+# Pull the hub first so we rebuild our subtree on top of other machines' latest
+# index, and the push below fast-forwards. Best-effort: offline still scans locally.
+session-hub-sync >/dev/null 2>&1 || true
 
 # Build a TSV of live sessions: sid \t cwd \t mtime \t subject
 TSV=$(mktemp)
