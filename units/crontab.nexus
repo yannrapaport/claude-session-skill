@@ -1,7 +1,7 @@
 # Claude session consolidation — Nexus. Install: crontab -e and paste, or
 #   (crontab -l 2>/dev/null; cat units/crontab.nexus) | crontab -
 # PATH must include the session bin dir for the helpers to resolve.
-PATH=/home/yann/.claude/skills/session/bin:/usr/local/bin:/usr/bin:/bin
+PATH=/home/yrapaport/.claude/skills/session/bin:/usr/local/bin:/usr/bin:/bin
 */15 * * * * session-index-scan >> /tmp/session-index.log 2>&1
 0    * * * * session-gc-process --kill >> /tmp/session-gc-process.log 2>&1
 0 4  * * * GC_CHECKPOINT_CMD=true session-gc-sessions >> /tmp/session-gc-sessions.log 2>&1
