@@ -46,8 +46,8 @@ BIN_DIR="$INSTALL_DIR/bin"
 
 # Must be a real copy. Symlinking $PLUGIN_CACHE was tested and fails: Claude
 # Code owns this directory and garbage-collects anything that isn't a plain
-# dir — it deleted the whole cache tree mid-session. The copy goes stale on
-# every `git pull`, so re-run this script after pulling (see README).
+# dir — it deleted the whole cache tree mid-session. The copy would go stale on
+# every `git pull`, so the post-merge/post-rewrite hooks below keep it in sync.
 rm -rf "$PLUGIN_CACHE"
 mkdir -p "$PLUGIN_CACHE"
 cp -r "$INSTALL_DIR/plugins/session/." "$PLUGIN_CACHE/"
