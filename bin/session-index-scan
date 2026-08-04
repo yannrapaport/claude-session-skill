@@ -88,7 +88,10 @@ for raw in open(tsv):
         "subject": subj or p.get("subject", ""),
         "turns": int(turns or 0),
         "size_kb": int(size_kb or 0),
-        "git_branch": branch or p.get("git_branch", ""),
+        # No carry-over from the previous scan: the whole transcript is re-read
+        # every time, so "no branch" is an answer, not a failed lookup. Falling
+        # back would pin a stale branch in place permanently.
+        "git_branch": branch,
         "status": p.get("status", "active"),
     }
 machines[machine] = new   # entries not in `seen` are dropped => pruning

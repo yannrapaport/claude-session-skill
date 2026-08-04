@@ -55,6 +55,12 @@ rich() { python3 -c "import json;print(json.load(open('$REG'))['machines']['mac'
 assert_eq "scan sets title"      "the thing" "$(rich title)"
 assert_eq "scan counts turns"    "2"         "$(rich turns)"
 assert_eq "scan sets git_branch" "feat/x"    "$(rich git_branch)"
+# A branch that goes away must clear, not linger from the previous scan.
+cat > "$CLAUDE_DIR/projects/$ENC/sid-rich.jsonl" << EOF
+{"type":"user","entrypoint":"cli","gitBranch":"HEAD","cwd":"$PROJ","message":{"role":"user","content":"Build the thing"}}
+EOF
+session-index-scan
+assert_eq "scan clears a stale branch" "" "$(rich git_branch)"
 rm "$CLAUDE_DIR/projects/$ENC/sid-rich.jsonl"
 
 # Headless transcripts are machine traffic — never indexed.
