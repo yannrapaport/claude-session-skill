@@ -39,6 +39,15 @@ cp -r "$INSTALL_DIR/plugins/session/." "$PLUGIN_CACHE/"
 ln -sfn "$INSTALL_DIR" "$PLUGIN_MARKETPLACE"
 echo "✓  Plugin files copied to cache"
 
+# Keep that copy in sync: re-run the refresh after every pull.
+if [ -d "$INSTALL_DIR/.git" ]; then
+  for h in post-merge post-rewrite; do
+    cp "$INSTALL_DIR/hooks/refresh-plugin-cache" "$INSTALL_DIR/.git/hooks/$h"
+    chmod +x "$INSTALL_DIR/.git/hooks/$h"
+  done
+  echo "✓  git hooks installed (cache refreshes on pull)"
+fi
+
 PLUGINS_DIR="$HOME/.claude/plugins"
 NOW=$(python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z'))")
 

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Refresh the Claude Code plugin cache from the working tree.
+#
+# The cache must be a real copy — symlinking it makes Claude Code garbage-collect
+# the whole tree (see install.sh). So it goes stale on every pull unless something
+# re-copies it, which is what this hook is for. Installed as both post-merge and
+# post-rewrite: a fast-forward pull fires post-merge, a `pull --rebase` that
+# replays local commits fires post-rewrite instead.
+set -euo pipefail
+
+PLUGIN_CACHE="$HOME/.claude/plugins/cache/claude-session-skill/session/1.0.0"
+SRC="$(git rev-parse --show-toplevel)/plugins/session"
+
+[ -d "$SRC" ] || exit 0
+
+# Replace contents but keep .in_use/ — those are liveness markers for Claude Code
+# sessions running right now, and dropping them mid-session is not our call.
+mkdir -p "$PLUGIN_CACHE"
+find "$PLUGIN_CACHE" -mindepth 1 -maxdepth 1 ! -name '.in_use' -exec rm -rf {} +
+cp -r "$SRC/." "$PLUGIN_CACHE/"
+
+echo "✓  session plugin cache refreshed — restart Claude Code to pick it up"
