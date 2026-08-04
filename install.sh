@@ -19,7 +19,22 @@ PLUGIN_MARKETPLACE="$HOME/.claude/plugins/marketplaces/claude-session-skill"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo "↻  Updating skill files in $INSTALL_DIR..."
+  BEFORE=$(git -C "$INSTALL_DIR" rev-parse HEAD)
   git -C "$INSTALL_DIR" pull --rebase --quiet
+  AFTER=$(git -C "$INSTALL_DIR" rev-parse HEAD)
+
+  # The pull may have rewritten this very script, but bash already read the old
+  # one and keeps executing it — so a change to install.sh would only take effect
+  # on the *next* run. Re-exec on the new version instead. The guard variable
+  # stops a loop if the re-exec somehow lands on a still-changing file.
+  if [ "$BEFORE" != "$AFTER" ] && [ "${SESSION_INSTALL_REEXEC:-}" != "1" ] &&
+     ! git -C "$INSTALL_DIR" diff --quiet "$BEFORE" "$AFTER" -- install.sh; then
+    echo "↻  install.sh changed — re-running the updated version"
+    export SESSION_INSTALL_REEXEC=1
+    # ${1:+"$@"} not "$@": bash 3.2 (still the default on macOS) trips `set -u`
+    # on an empty "$@".
+    exec bash "$INSTALL_DIR/install.sh" ${1:+"$@"}
+  fi
 else
   echo "↓  Cloning skill into $INSTALL_DIR..."
   git clone --quiet "$REPO" "$INSTALL_DIR"
