@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Usage: session-meta <jsonl-path>
+# Prints one TSV line describing a transcript:
+#   entrypoint \t title \t subject \t turns \t size_kb \t git_branch
+#
+# entrypoint  "cli" for an interactive session, "sdk-cli" for a headless run
+#             (cron, SDK, scripted subagent), "" when the transcript never
+#             recorded one. The index keeps only "cli" — everything else is
+#             machine traffic, not work anyone resumes.
+# title       the session's custom-title when it has one, else the subject.
+# subject     first "real" user message (same rule as session-subject).
+# turns       count of user messages — separates a worked session from a
+#             one-shot launch that went nowhere.
+# git_branch  last branch the session recorded.
+#
+# Bails out as soon as a non-cli entrypoint is known: those transcripts are
+# dropped anyway, and there are thousands of them on a busy machine.
+set -euo pipefail
+F="${1:-}"
+[ -f "$F" ] || { printf '\t\t\t0\t0\t\n'; exit 0; }
+python3 - "$F" << 'PYEOF'
+import json, os, re, sys
+
+SKIP = ("base directory for this skill", "caveat:", "<command", "<system-reminder",
+        "<local-command", "command-name", "command-message")
+MENU = re.compile(r"^(\d{1,3}|\d{4}-\d{2}-\d{2}-\d{4}-[a-z0-9-]+)$")
+
+def text_of(msg):
+    c = msg.get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return "".join(p.get("text", "") for p in c
+                       if isinstance(p, dict) and p.get("type") == "text")
+    return ""
+
+path = sys.argv[1]
+entrypoint = title = subject = branch = ""
+turns = 0
+
+for line in open(path, errors="ignore"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        o = json.loads(line)
+    except Exception:
+        continue
+
+    if not entrypoint:
+        ep = o.get("entrypoint")
+        if ep:
+            entrypoint = ep
+            if ep != "cli":
+                break   # headless run — the index drops it, don't read further
+
+    # "HEAD" is what a detached checkout or a non-repo cwd reports — it names
+    # no branch, so treat it as absent rather than printing it in every row.
+    if o.get("gitBranch") and o["gitBranch"] != "HEAD":
+        branch = o["gitBranch"]
+
+    t = o.get("type")
+    if t == "custom-title":
+        title = o.get("customTitle") or title
+    elif t == "user":
+        turns += 1
+        if not subject:
+            txt = text_of(o.get("message", {})).strip()
+            if txt and not txt.startswith("<"):
+                low = txt.lower()
+                if not any(s in low for s in SKIP):
+                    txt = " ".join(txt.split())
+                    if not MENU.match(txt):
+                        subject = txt[:80]
+
+def clean(s):
+    return " ".join(str(s).replace("\t", " ").split())
+
+size_kb = os.path.getsize(path) // 1024
+print("\t".join([clean(entrypoint), clean(title or subject), clean(subject),
+                 str(turns), str(size_kb), clean(branch)]))
+PYEOF

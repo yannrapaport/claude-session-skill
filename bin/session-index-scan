@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # session-index-scan — scan THIS machine's transcripts and upsert its registry subtree.
 # - Walks $CLAUDE_DIR/projects/*/*.jsonl (CLAUDE_DIR defaults to ~/.claude).
-# - For each: project_relative (cwd minus home), cwd, last_activity (mtime), subject.
+# - For each: project_relative (cwd minus home), cwd, last_activity (mtime),
+#   title, subject, turns, size_kb, git_branch.
+# - Skips headless transcripts (entrypoint other than "cli"): cron runs, SDK
+#   subagents and scripted one-shots outnumbered real sessions ~20:1 and are
+#   not things anyone resumes. A transcript with no recorded entrypoint gets
+#   the benefit of the doubt and is indexed.
 # - Preserves existing 'status' (so archived stays archived).
 # - Prunes entries under this machine whose jsonl no longer exists.
 # - Commits + pushes the hub (skipped if session-hub-push is a no-op stub).
@@ -16,22 +21,31 @@ mkdir -p "$HUB_DIR"
 # index, and the push below fast-forwards. Best-effort: offline still scans locally.
 session-hub-sync >/dev/null 2>&1 || true
 
-# Build a TSV of live sessions: sid \t cwd \t mtime \t subject
+# Build a TSV of live sessions:
+#   sid \t cwd \t mtime \t title \t subject \t turns \t size_kb \t git_branch
 TSV=$(mktemp)
 trap 'rm -f "$TSV"' EXIT
 shopt -s nullglob
+SKIPPED=0
 for f in "$CLAUDE_DIR"/projects/*/*.jsonl; do
   sid=$(basename "$f" .jsonl)
   cwd=$(session-jsonl-cwd "$f")
   [ -z "$cwd" ] && continue   # cannot place a session with no recorded cwd
+  # Keep the meta line whole: `read -r` with IFS=tab would coalesce runs of
+  # tabs and strip leading ones, so empty fields (a session with no title, no
+  # branch) would silently shift every column. Only the entrypoint is split
+  # out here, to skip headless work before paying for the mtime call.
+  meta=$(session-meta "$f")
+  entrypoint=$(printf '%s\n' "$meta" | cut -f1)
+  if [ -n "$entrypoint" ] && [ "$entrypoint" != "cli" ]; then
+    SKIPPED=$((SKIPPED+1)); continue
+  fi
   mtime=$(python3 - "$f" <<'PY'
 import os, datetime, sys
 print(datetime.datetime.fromtimestamp(os.path.getmtime(sys.argv[1]), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 PY
 )
-  subj=$(session-subject "$f")
-  subj="${subj//$'\t'/ }"
-  printf '%s\t%s\t%s\t%s\n' "$sid" "$cwd" "$mtime" "$subj" >> "$TSV"
+  printf '%s\t%s\t%s\t%s\n' "$sid" "$cwd" "$mtime" "$meta" >> "$TSV"
 done
 
 python3 - "$REGISTRY" "$MACHINE" "$HOME_DIR" "$TSV" << 'PYEOF'
@@ -47,11 +61,16 @@ prev = machines.get(machine, {})
 new = {}
 seen = set()
 home_pref = home.rstrip("/") + "/"
+def at(parts, i, default=""):
+    return parts[i] if len(parts) > i and parts[i] != "" else default
+
 for raw in open(tsv):
     parts = raw.rstrip("\n").split("\t")
     if len(parts) < 3: continue
     sid, cwd, mtime = parts[0], parts[1], parts[2]
-    subj = parts[3] if len(parts) > 3 else ""
+    # parts[3] is the entrypoint, already vetted by the shell loop above.
+    title, subj = at(parts, 4), at(parts, 5)
+    turns, size_kb, branch = at(parts, 6, "0"), at(parts, 7, "0"), at(parts, 8)
     seen.add(sid)
     home_bare = home.rstrip("/")
     if cwd == home_bare:
@@ -65,7 +84,11 @@ for raw in open(tsv):
         "project_relative": rel,
         "cwd": cwd,
         "last_activity": mtime,
+        "title": title or p.get("title", ""),
         "subject": subj or p.get("subject", ""),
+        "turns": int(turns or 0),
+        "size_kb": int(size_kb or 0),
+        "git_branch": branch or p.get("git_branch", ""),
         "status": p.get("status", "active"),
     }
 machines[machine] = new   # entries not in `seen` are dropped => pruning
@@ -77,4 +100,5 @@ with os.fdopen(fd, "w") as fh:
 os.replace(tmp, registry)
 print(f"Indexed {len(new)} session(s) for {machine}.")
 PYEOF
+if [ "$SKIPPED" -gt 0 ]; then echo "Skipped $SKIPPED headless transcript(s)."; fi
 session-hub-push "index: $MACHINE $(date -u +%Y-%m-%dT%H:%MZ)" || true

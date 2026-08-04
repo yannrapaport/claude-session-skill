@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Usage: session-resolve <row-number|id-prefix|id>
+# Prints the full session id on stdout, or explains the miss on stderr and exits 1.
+#
+# A row number refers to the last `sessions` listing, recorded in
+# $HUB_DIR/last-list.json. Numbers are the everyday handle; ids still work for
+# anything scripted or quoted from elsewhere.
+set -euo pipefail
+ARG="${1:-}"
+[ -n "$ARG" ] || { echo "Usage: session-resolve <row-number|id-prefix|id>" >&2; exit 1; }
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+
+if [[ "$ARG" =~ ^[0-9]+$ ]]; then
+  python3 - "$HUB_DIR/last-list.json" "$ARG" << 'PYEOF'
+import json, os, sys
+path, n = sys.argv[1], int(sys.argv[2])
+if not os.path.exists(path):
+    sys.exit("No listing to number against. Run `sessions` first.")
+ids = json.load(open(path)).get("ids", [])
+if not 1 <= n <= len(ids):
+    sys.exit(f"Row {n} is out of range — the last listing had {len(ids)} row(s). "
+             "Run `sessions` again.")
+print(ids[n - 1])
+PYEOF
+  exit $?
+fi
+
+session-index-view | python3 -c "
+import json, sys
+rows = json.load(sys.stdin)
+p = sys.argv[1]
+hits = [r['id'] for r in rows if r['id'].startswith(p)]
+if len(hits) == 1:
+    print(hits[0])
+elif not hits:
+    sys.exit(f\"No session id starts with '{p}'.\")
+else:
+    sys.exit(f\"'{p}' matches {len(hits)} sessions — use more characters.\")
+" "$ARG"

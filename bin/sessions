@@ -1,30 +1,103 @@
 #!/usr/bin/env bash
 # sessions — human-facing table of all sessions across machines.
 # Passes flags through to session-index-view: --project <s>, --machine <m>, --active.
+#
+# Rows are numbered, and the numbering is written to $HUB_DIR/last-list.json so
+# `/session:resume 3` can name the third row without anyone reading a uuid.
+# The numbers describe the last listing only — re-running `sessions` renumbers.
 set -euo pipefail
 session-hub-sync >/dev/null 2>&1 || true
 THIS=$(session-config machine 2>/dev/null || echo "")
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 _TMP=$(mktemp)
 trap 'rm -f "$_TMP"' EXIT
 session-index-view "$@" > "$_TMP"
-python3 - "$THIS" "$_TMP" << 'PYEOF'
-import json, sys
-this = sys.argv[1]
-with open(sys.argv[2]) as f:
+python3 - "$THIS" "$_TMP" "$HUB_DIR/last-list.json" << 'PYEOF'
+import json, os, signal, sys, tempfile
+from datetime import datetime, timezone
+
+# `sessions | head` is the normal way to skim; don't traceback on the closed pipe.
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+this, rows_path, list_path = sys.argv[1:4]
+with open(rows_path) as f:
     rows = json.load(f)
+
 if not rows:
-    print("No sessions in index. Run session-index-scan (or wait for the scheduled job)."); sys.exit(0)
-print(f"{'Date':<11} {'Machine':<8} {'St':<4} {'Project':<26} {'Subject'}")
-print("-" * 90)
-for r in rows:
-    date = (r.get("last_activity") or "")[:10]
-    mach = r.get("machine","?")
-    here = "*" if mach == this else " "
-    st = "arch" if r.get("status") == "archived" else "act"
-    proj = (r.get("project_relative") or "?")[:26]
-    subj = (r.get("subject") or "")[:48]
-    extra = ("+"+",".join(r["also_on"])) if r.get("also_on") else ""
-    print(f"{date:<11} {mach:<7}{here} {st:<4} {proj:<26} {subj} {extra}")
+    print("No sessions in index. Run session-index-scan (or wait for the scheduled job).")
+    sys.exit(0)
+
+MONTHS = ["janv", "fév", "mars", "avr", "mai", "juin",
+          "juil", "août", "sept", "oct", "nov", "déc"]
+
+def when(iso):
+    """Relative age: time of day today, 'hier', 'Nj' within the week, else a date."""
+    if not iso:
+        return "?"
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return iso[:10]
+    days = (datetime.now().astimezone().date() - dt.date()).days
+    if days <= 0:
+        return dt.strftime("%H:%M")
+    if days == 1:
+        return "hier"
+    if days < 7:
+        return f"{days}j"
+    return f"{dt.day} {MONTHS[dt.month - 1]}"
+
+def volume(turns, size_kb):
+    """Turn count and transcript weight — a worked session vs a quick exchange."""
+    if not turns and not size_kb:
+        return ""
+    size = f"{size_kb / 1024:.0f}M" if size_kb >= 1024 else f"{size_kb}K"
+    return f"{turns}t {size}"
+
+def clip(s, n):
+    s = s or ""
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+W_NUM, W_WHEN, W_MACH, W_PROJ, W_TITLE, W_VOL, W_BRANCH = 4, 8, 8, 22, 42, 11, 14
+
+header = (f"{'#':>{W_NUM}}  {'Quand':<{W_WHEN}}{'Machine':<{W_MACH}}"
+          f"{'Projet':<{W_PROJ}}{'Titre':<{W_TITLE}}{'Volume':<{W_VOL}}{'Branche'}")
 print()
-print(f"  * = this machine ({this}).  Resume: /session:resume <id-prefix>")
+print(header)
+print("─" * len(header))
+
+ids = []
+for i, r in enumerate(rows, 1):
+    ids.append(r.get("id", ""))
+    mach = r.get("machine", "?")
+    mach = mach + ("*" if mach == this else "")
+    if r.get("also_on"):
+        mach += "+"
+    proj = r.get("project_relative") or "~"
+    # The index stores paths as projects/<x>; the leading segment is noise here.
+    if proj.startswith("projects/"):
+        proj = proj[len("projects/"):]
+    title = r.get("title") or r.get("subject") or "—"
+    if r.get("status") == "archived":
+        title = "· " + title       # archived: still listed, visibly parked
+    vol = volume(r.get("turns", 0), r.get("size_kb", 0))
+    print(f"{i:>{W_NUM}}  {clip(when(r.get('last_activity')), W_WHEN - 1):<{W_WHEN}}"
+          f"{clip(mach, W_MACH - 1):<{W_MACH}}{clip(proj, W_PROJ - 1):<{W_PROJ}}"
+          f"{clip(title, W_TITLE - 1):<{W_TITLE}}{clip(vol, W_VOL - 1):<{W_VOL}}"
+          f"{clip(r.get('git_branch', ''), W_BRANCH)}")
+
+print()
+print(f"  * = cette machine ({this})   + = aussi ailleurs   · = archivée")
+print("  Reprendre :  /session:resume 3   (le numéro de ligne ci-dessus)")
+
+# Record the numbering so `session-resolve <n>` can turn a row number into an id.
+try:
+    os.makedirs(os.path.dirname(list_path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(list_path), suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                   "ids": ids}, fh, indent=2)
+    os.replace(tmp, list_path)
+except OSError:
+    pass   # a read-only hub still lists fine; only numeric resume needs this
 PYEOF

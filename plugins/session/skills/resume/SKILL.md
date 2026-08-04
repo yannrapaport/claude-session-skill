@@ -1,7 +1,7 @@
 ---
 name: resume
 description: Resume any session from the index on this machine — pulls the JSONL over ssh if it lives on another machine, then claude --resume.
-argument-hint: "[session-id-or-prefix]"
+argument-hint: "[row-number-or-id]"
 allowed-tools:
   - Bash
   - Read
@@ -18,9 +18,11 @@ machine, resume directly. If it lives on another machine, pull it over ssh first
 - `bin/` helpers are on `$PATH`.
 
 ## Usage
-/session:resume [session-id-or-prefix]
+/session:resume [row-number-or-id]
 
-Omit the argument to pick from the list.
+The argument is normally a row number from the last `sessions` listing — `3`
+resumes the third row. A full session id or a unique id prefix also works.
+Omit it to pick from the list.
 
 ## Steps
 
@@ -30,15 +32,16 @@ session-hub-sync
 THIS=$(session-config machine)
 HOME_DIR=$(session-config home)
 ```
-If no argument was given, run `sessions` and ask the user which id to resume
-(full id or unique prefix). Expand a prefix to a full id with:
+If no argument was given, run `sessions` and ask the user which row to resume.
+
+Turn whatever the user gave into a full session id:
 ```bash
-SID=$(session-index-view | python3 -c "import json,sys; \
-  rows=json.load(sys.stdin); p='<prefix>'; \
-  m=[r['id'] for r in rows if r['id'].startswith(p)]; \
-  print(m[0] if len(m)==1 else '')")
+SID=$(session-resolve "<argument>") || { sessions; exit 1; }
 ```
-If `$SID` is empty, the prefix was ambiguous or unknown — show `sessions` and stop.
+`session-resolve` refuses an out-of-range row, an unknown prefix, or an
+ambiguous one, and says which — show `sessions` again and stop rather than
+guessing. A row number needs a prior listing in this hub; if it reports there
+is none, run `sessions` first and ask the user to re-pick.
 
 ### 2. Look up the session
 ```bash

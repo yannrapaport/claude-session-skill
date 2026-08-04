@@ -44,6 +44,31 @@ assert_eq "scan sets project_relative" "projects/foo" "$PR"
 assert_eq "scan sets subject" "Build the thing" "$SUB"
 assert_eq "scan sets cwd" "$PROJ" "$CWD"
 
+# Rich fields land in the entry alongside the subject.
+cat > "$CLAUDE_DIR/projects/$ENC/sid-rich.jsonl" << EOF
+{"type":"user","entrypoint":"cli","gitBranch":"feat/x","cwd":"$PROJ","message":{"role":"user","content":"Build the thing"}}
+{"type":"user","cwd":"$PROJ","message":{"role":"user","content":"keep going"}}
+{"type":"custom-title","customTitle":"the thing"}
+EOF
+session-index-scan
+rich() { python3 -c "import json;print(json.load(open('$REG'))['machines']['mac']['sid-rich']['$1'])"; }
+assert_eq "scan sets title"      "the thing" "$(rich title)"
+assert_eq "scan counts turns"    "2"         "$(rich turns)"
+assert_eq "scan sets git_branch" "feat/x"    "$(rich git_branch)"
+rm "$CLAUDE_DIR/projects/$ENC/sid-rich.jsonl"
+
+# Headless transcripts are machine traffic — never indexed.
+cat > "$CLAUDE_DIR/projects/$ENC/sid-bot.jsonl" << EOF
+{"type":"user","entrypoint":"sdk-cli","cwd":"$PROJ","message":{"role":"user","content":"You extract structured data"}}
+EOF
+session-index-scan
+BOT=$(python3 -c "import json;print('sid-bot' in json.load(open('$REG'))['machines']['mac'])")
+assert_eq "scan skips headless transcript" "False" "$BOT"
+# ...and the interactive one next to it still is.
+KEPT=$(python3 -c "import json;print('sid-aaa' in json.load(open('$REG'))['machines']['mac'])")
+assert_eq "scan keeps interactive alongside headless" "True" "$KEPT"
+rm "$CLAUDE_DIR/projects/$ENC/sid-bot.jsonl"
+
 # Pruning: delete the jsonl, rescan -> entry gone.
 rm "$CLAUDE_DIR/projects/$ENC/sid-aaa.jsonl"
 session-index-scan

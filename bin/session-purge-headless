@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Usage: session-purge-headless [--yes]
+# Deletes THIS machine's headless transcripts — the ones session-index-scan
+# refuses to index because their entrypoint is not "cli": cron runs, SDK
+# subagents, scripted one-shots. Nobody resumes those, and on a machine that
+# runs scheduled agents they outnumber real sessions many times over.
+#
+# Dry run by default: it reports what it would remove and touches nothing.
+# Pass --yes to actually delete. Transcripts with no recorded entrypoint are
+# left alone — same benefit of the doubt the indexer gives them.
+set -euo pipefail
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+APPLY=false
+[ "${1:-}" = "--yes" ] && APPLY=true
+
+shopt -s nullglob
+COUNT=0
+BYTES=0
+for f in "$CLAUDE_DIR"/projects/*/*.jsonl; do
+  ep=$(session-meta "$f" | cut -f1)
+  [ -n "$ep" ] || continue          # no entrypoint recorded — keep
+  [ "$ep" = "cli" ] && continue     # interactive — keep
+  sz=$(wc -c < "$f" | tr -d ' ')
+  COUNT=$((COUNT+1)); BYTES=$((BYTES+sz))
+  if [ "$APPLY" = true ]; then
+    rm -f "$f"
+  fi
+done
+
+MB=$((BYTES / 1024 / 1024))
+if [ "$APPLY" = true ]; then
+  echo "Purged $COUNT headless transcript(s), ${MB}MB reclaimed."
+  # Drop any index entries that pointed at them.
+  session-index-scan
+else
+  echo "Would purge $COUNT headless transcript(s), ${MB}MB. Re-run with --yes to apply."
+fi
