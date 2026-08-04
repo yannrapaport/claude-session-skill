@@ -11,7 +11,12 @@ set -euo pipefail
 PLUGIN_CACHE="$HOME/.claude/plugins/cache/claude-session-skill/session/1.0.0"
 SRC="$(git rev-parse --show-toplevel)/plugins/session"
 
-[ -d "$SRC" ] || exit 0
+# Git runs hooks from the repo root, so this resolves correctly. Run by hand from
+# elsewhere and it won't — say so rather than exiting 0 as if we had done the work.
+if [ ! -d "$SRC" ]; then
+  echo "⚠  $SRC not found — plugin cache NOT refreshed (run this from the repo root)" >&2
+  exit 0
+fi
 
 # Replace contents but keep .in_use/ — those are liveness markers for Claude Code
 # sessions running right now, and dropping them mid-session is not our call.
