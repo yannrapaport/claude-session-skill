@@ -31,9 +31,7 @@ if [ -d "$INSTALL_DIR/.git" ]; then
      ! git -C "$INSTALL_DIR" diff --quiet "$BEFORE" "$AFTER" -- install.sh; then
     echo "↻  install.sh changed — re-running the updated version"
     export SESSION_INSTALL_REEXEC=1
-    # ${1:+"$@"} not "$@": bash 3.2 (still the default on macOS) trips `set -u`
-    # on an empty "$@".
-    exec bash "$INSTALL_DIR/install.sh" ${1:+"$@"}
+    exec bash "$INSTALL_DIR/install.sh" "$@"
   fi
 else
   echo "↓  Cloning skill into $INSTALL_DIR..."
