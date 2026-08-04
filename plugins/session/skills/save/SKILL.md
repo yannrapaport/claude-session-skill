@@ -1,5 +1,5 @@
 ---
-name: session:save
+name: save
 description: DEPRECATED — use /ai-brain:save. Semantic checkpoints now live in the ai-brain vault.
 allowed-tools:
   - Bash

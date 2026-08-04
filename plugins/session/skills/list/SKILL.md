@@ -1,5 +1,5 @@
 ---
-name: session:list
+name: list
 description: List all sessions across every machine (the global cross-machine view), newest first.
 allowed-tools:
   - Bash

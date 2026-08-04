@@ -1,5 +1,5 @@
 ---
-name: session:resume
+name: resume
 description: Resume any session from the index on this machine — pulls the JSONL over ssh if it lives on another machine, then claude --resume.
 argument-hint: "[session-id-or-prefix]"
 allowed-tools:

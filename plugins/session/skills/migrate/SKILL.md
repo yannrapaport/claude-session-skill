@@ -1,5 +1,5 @@
 ---
-name: session:migrate
+name: migrate
 description: DEPRECATED — migration is automatic. The index discovers sessions on every machine; use /session:resume to pull one on demand.
 argument-hint: ""
 allowed-tools:
