@@ -71,7 +71,7 @@ for line in open(path, errors="ignore"):
                 if not any(s in low for s in SKIP):
                     txt = " ".join(txt.split())
                     if not MENU.match(txt):
-                        subject = txt[:80]
+                        subject = txt[:200]
 
 def clean(s):
     return " ".join(str(s).replace("\t", " ").split())

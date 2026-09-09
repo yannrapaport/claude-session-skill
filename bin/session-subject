@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: session-subject <jsonl-path>
-# Prints the first "real" user message (<=80 chars, no trailing newline), or "".
+# Prints the first "real" user message (<=200 chars, no trailing newline), or "".
 # Skips: assistant/meta lines, content starting with '<', and known wrappers.
 set -euo pipefail
 F="${1:-}"
@@ -29,5 +29,5 @@ for line in open(sys.argv[1], errors="ignore"):
     if t.startswith("<") or any(s in low for s in SKIP): continue
     t = " ".join(t.split())
     if MENU.match(t): continue
-    sys.stdout.write(t[:80]); break
+    sys.stdout.write(t[:200]); break
 PYEOF

@@ -58,7 +58,15 @@ def clip(s, n):
     s = s or ""
     return s if len(s) <= n else s[: n - 1] + "…"
 
-W_NUM, W_WHEN, W_MACH, W_PROJ, W_TITLE, W_VOL, W_BRANCH = 4, 8, 8, 22, 42, 11, 14
+# Title takes whatever the terminal leaves after the fixed columns; the other
+# widths are fixed because their content is. Piped output has no tty, so fall
+# back to a wide-but-sane 140 rather than the 80 get_terminal_size() invents.
+W_NUM, W_WHEN, W_MACH, W_PROJ, W_VOL, W_BRANCH = 4, 8, 8, 22, 11, 14
+import shutil
+_cols = shutil.get_terminal_size(fallback=(0, 0)).columns or 0
+if not sys.stdout.isatty() or _cols < 60:
+    _cols = int(os.environ.get("COLUMNS") or 140)
+W_TITLE = max(42, _cols - (W_NUM + 2 + W_WHEN + W_MACH + W_PROJ + W_VOL + W_BRANCH))
 
 header = (f"{'#':>{W_NUM}}  {'Quand':<{W_WHEN}}{'Machine':<{W_MACH}}"
           f"{'Projet':<{W_PROJ}}{'Titre':<{W_TITLE}}{'Volume':<{W_VOL}}{'Branche'}")
