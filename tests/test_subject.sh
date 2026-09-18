@@ -14,10 +14,10 @@ cat > "$TMP/a.jsonl" << 'EOF'
 {"type":"user","message":{"role":"user","content":[{"type":"text","text":"Fix the login bug"}]}}
 EOF
 assert_eq "subject reads block content" "Fix the login bug" "$(session-subject "$TMP/a.jsonl")"
-# truncation at 80 chars
-LONG=$(printf 'x%.0s' {1..100})
+# truncation at 200 chars
+LONG=$(printf 'x%.0s' {1..250})
 echo "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"$LONG\"}}" > "$TMP/l.jsonl"
-assert_eq "subject truncates to 80" "80" "$(session-subject "$TMP/l.jsonl" | wc -c | tr -d ' ')"
+assert_eq "subject truncates to 200" "200" "$(session-subject "$TMP/l.jsonl" | wc -c | tr -d ' ')"
 # Skips a bare-number menu answer, falls through to the real message.
 cat > "$TMP/m.jsonl" << 'EOF'
 {"type":"user","message":{"role":"user","content":"10"}}
