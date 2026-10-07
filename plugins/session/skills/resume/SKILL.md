@@ -1,6 +1,6 @@
 ---
 name: resume
-description: Resume any session from the index on this machine — pulls the JSONL over ssh if it lives on another machine, then claude --resume.
+description: Resume any session from the index on this machine — pulls the JSONL over ssh if it lives on another machine, then revives it as a background session to join from agent view.
 argument-hint: "[row-number-or-id]"
 allowed-tools:
   - Bash
@@ -87,10 +87,28 @@ Checkpoints now live in the ai-brain vault (semantic) — point the user at them
 rather than auto-loading: tell them they can run `/ai-brain:restore` for the
 matching project if they want the work summary. Do not block resume on this.
 
-### 6. Launch
+### 6. Revive it as a background session
+A skill cannot switch the running session, and `claude --resume` from Bash
+would start a second interactive one nobody sees. Revive it in the background
+instead: it shows up as a row in agent view (`cc`, `claude agents`), and the
+user joins it from there without quitting anything.
+
+If it is already a background session, reviving it again would fork a copy
+under a new id — say so and stop:
 ```bash
-cd "$PROJECT_PATH"
-claude --resume "$SID"
+SHORT=${SID%%-*}
+if claude agents --json 2>/dev/null | grep -q "\"sessionId\": *\"$SID\""; then
+  echo "Already running as background session $SHORT — join it from agent view, or: claude attach $SHORT"
+  exit 0
+fi
 ```
+Otherwise revive it from its own directory, so it keeps its project scope:
+```bash
+cd "$PROJECT_PATH" && claude --resume "$SID" --bg
+```
+It comes back idle under its original id. Tell the user its title and short
+id, and that they join it from agent view (`cc <subject>`) or with
+`claude attach <short-id>`.
+
 The next scheduled index scan on this machine will record the session locally;
 no manual registry update is needed.

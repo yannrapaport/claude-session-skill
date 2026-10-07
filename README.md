@@ -28,8 +28,10 @@ The row number is the handle — `/session:resume 3` takes the third row. Number
 
 `session-resolve` turns a row number, a full id, or a unique id prefix into a session id — refusing an out-of-range row, an unknown prefix, or an ambiguous one rather than guessing. Then it looks up the owning machine in the registry and resumes:
 
-- **Local session** — `claude --resume <id>` directly.
-- **Remote session** — rsync the JSONL over ssh from `peer_<machine>`, then `claude --resume <id>`.
+- **Local session** — `claude --resume <id> --bg` directly.
+- **Remote session** — rsync the JSONL over ssh from `peer_<machine>`, then `claude --resume <id> --bg`.
+
+The session comes back as an idle background session under its original id, so it shows up in agent view (`claude agents`) and is joined from there — nothing to quit. A session already running in the background is not revived twice (that would fork a copy); the skill points at it instead.
 
 If the remote machine is unreachable, fails with a clear message (the machine must be up and on the network).
 
