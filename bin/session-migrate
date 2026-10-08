@@ -7,6 +7,9 @@
 # the install: a migration only exists once the hub has it. The source copy is
 # then reconciled (trashed if untouched), right away if reachable, else at its
 # next scan.
+# Push rejected because the hub moved on meanwhile: our commit (meta/<id>.json
+# only) is rebased onto it and pushed again (twice at most); a rebase conflict
+# rolls back like any refused push.
 # Push error that can't be checked (fetch fails too): nothing is undone — the
 # install and the local commit stay, a warning says the next push will confirm
 # it, exit 0.
@@ -107,7 +110,7 @@ if [ -n "$REACHABLE" ]; then
 else
   say "$OWNER injoignable — réplique du $(echo "$INFO" | jget replicated_at), dernière activité connue sur $OWNER : $(echo "$SRCE" | jget last_activity)"
   confirm "Migrer depuis la réplique ?" || exit 1
-  cp -R "$REP/." "$STAGE/" || { say "copie de la réplique impossible — migration annulée"; exit 1; }
+  cp -Rp "$REP/." "$STAGE/" || { say "copie de la réplique impossible — migration annulée"; exit 1; }
   rm -f "$STAGE/source.json"
 fi
 
@@ -173,17 +176,38 @@ landed() {
   done
   return 1
 }
-UNSURE=""
-if ! git -C "$HUB_DIR" push -q origin HEAD 2>/dev/null; then
+upstream() {
+  local r
+  for r in origin/main origin/master; do
+    git -C "$HUB_DIR" rev-parse -q --verify "$r" >/dev/null && { echo "$r"; return 0; }
+  done
+  return 1
+}
+# The hub moved on since our sync (the other machine's scan pushed): replay our
+# one-file commit on top of it. A conflict aborts the rebase, HEAD back on OURS.
+replay() {
+  local up; up=$(upstream) || return 1
+  ! git -C "$HUB_DIR" merge-base --is-ancestor "$up" HEAD 2>/dev/null || return 1   # not a race
+  if ! git -C "$HUB_DIR" rebase -q --autostash "$up" >/dev/null 2>&1; then
+    git -C "$HUB_DIR" rebase --abort >/dev/null 2>&1 || true
+    return 1
+  fi
+  OURS=$(git -C "$HUB_DIR" rev-parse HEAD)
+}
+UNSURE=""; TRIES=0
+until git -C "$HUB_DIR" push -q origin HEAD 2>/dev/null; do
   # The push may have reached the hub before failing: then the migration exists.
   if ! git -C "$HUB_DIR" fetch -q origin 2>/dev/null; then
-    UNSURE=1    # can't tell: undoing a migration that may be recorded is worse
-  elif ! landed; then
+    UNSURE=1; break    # can't tell: undoing a migration that may be recorded is worse
+  fi
+  landed && break
+  TRIES=$((TRIES + 1))
+  if [ "$TRIES" -gt 2 ] || ! replay; then
     # Drop our commit only, and only if nothing was committed on top of it.
     [ "$(git -C "$HUB_DIR" rev-parse HEAD)" != "$OURS" ] || git -C "$HUB_DIR" reset -q --soft HEAD~1
     rollback "push du hub refusé"
   fi
-fi
+done
 session-hub-lock release "$TOKEN"; TOKEN=""
 if [ -n "$UNSURE" ]; then
   # Keep the replica and leave the source alone until the hub confirms.

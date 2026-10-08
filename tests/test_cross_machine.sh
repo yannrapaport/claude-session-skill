@@ -78,4 +78,72 @@ echo "{\"$X\": \"$FORK\"}" > "$N/.claude/session-forks.json"
 on nexus session-reconcile >/dev/null 2>&1
 assert_eq "C2: link to a locally owned original never trashes it" "yes" "$(yn test -f "$FX")"
 
+# ── I1: another machine pushes between migrate's sync and its push ───────────
+S1=d1d1d1d1-1111-2222-3333-444444444444
+mk_session mac "$S1" "$M/projects/tpg/rakam" >/dev/null
+on mac session-index-scan >/dev/null 2>&1
+REALGIT=$(command -v git)
+mkdir -p "$MTMP/gitrace"
+cat > "$MTMP/gitrace/git" <<EOF
+#!/usr/bin/env bash
+if [[ " \$* " == *" push "* ]] && [ ! -e "$MTMP/raced" ]; then
+  touch "$MTMP/raced"
+  ( cd "$M/.claude/session-hub" && echo x > race.txt && "$REALGIT" add race.txt \
+    && "$REALGIT" commit -qm race && "$REALGIT" push -q origin HEAD ) >/dev/null 2>&1
+fi
+exec "$REALGIT" "\$@"
+EOF
+chmod +x "$MTMP/gitrace/git"
+rc=0; on nexus env PATH="$MTMP/gitrace:$PATH" session-migrate "$S1" --yes >/dev/null 2>&1 || rc=$?
+assert_eq "I1: race happened" "yes" "$(yn test -e "$MTMP/raced")"
+assert_eq "I1: migration succeeds despite the race" "0" "$rc"
+assert_eq "I1: owner on hub" "nexus" \
+  "$(git -C "$MTMP/hub.git" show "main:meta/$S1.json" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))' 2>/dev/null)"
+assert_eq "I1: other machine's commit kept" "x" "$(git -C "$MTMP/hub.git" show main:race.txt 2>/dev/null)"
+# The race touched this very session's meta → rebase conflict → clean rollback.
+S2=d2d2d2d2-1111-2222-3333-444444444444
+mk_session mac "$S2" "$M/projects/tpg/rakam" >/dev/null
+on mac session-index-scan >/dev/null 2>&1
+sed -e "s|race.txt|meta/$S2.json|g" -e "s|echo x >|echo '{\"priority\": \"must\"}' >|" \
+    -e "s|$MTMP/raced|$MTMP/raced2|g" "$MTMP/gitrace/git" > "$MTMP/gitrace/git.2"
+mkdir -p "$MTMP/gitrace2"; mv "$MTMP/gitrace/git.2" "$MTMP/gitrace2/git"; chmod +x "$MTMP/gitrace2/git"
+rc=0; on nexus env PATH="$MTMP/gitrace2:$PATH" session-migrate "$S2" --yes >/dev/null 2>&1 || rc=$?
+assert_eq "I1 conflict: race happened" "yes" "$(yn test -e "$MTMP/raced2")"
+assert_eq "I1 conflict: refused" "1" "$rc"
+assert_eq "I1 conflict: nothing installed" "no" "$(yn test -e "$N/.claude/projects/$NENC/$S2.jsonl")"
+assert_eq "I1 conflict: no rebase left over" "no" "$(yn test -d "$N/.claude/session-hub/.git/rebase-merge" -o -d "$N/.claude/session-hub/.git/rebase-apply")"
+assert_eq "I1 conflict: hub keeps the other machine's meta" "must" \
+  "$(git -C "$MTMP/hub.git" show "main:meta/$S2.json" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("priority",""))')"
+assert_eq "I1 conflict: local meta not owned by nexus" "" \
+  "$(on nexus session-metastore get "$S2" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')"
+assert_eq "I1 conflict: hub clone clean" "" "$(git -C "$N/.claude/session-hub" status --porcelain -- "meta/$S2.json")"
+
+# ── I2: a replica the Stop hook recreates after a from-replica migration ─────
+G=e2e2e2e2-1111-2222-3333-444444444444
+GF=$(mk_session mac "$G" "$M/projects/tpg/rakam")
+touch -t 202001010000 "$GF"
+on mac session-index-scan >/dev/null 2>&1
+on mac session-replicate "$G"
+down mac
+rc=0; on nexus session-migrate "$G" --yes >/dev/null 2>&1 || rc=$?
+up mac
+assert_eq "I2: from replica: migrates" "0" "$rc"
+assert_eq "M2: replica install keeps the mtime" "$(python3 -c 'import os,sys;print(int(os.path.getmtime(sys.argv[1])))' "$GF")" \
+  "$(python3 -c 'import os,sys;print(int(os.path.getmtime(sys.argv[1])))' "$N/.claude/projects/$NENC/$G.jsonl")"
+on mac session-replicate "$G"                    # Stop hook: mac's hub clone is stale
+assert_eq "I2: replica recreated by the hook" "yes" "$(yn test -f "$N/.claude/session-replica/mac/$G/$G.jsonl")"
+on mac session-replicate
+assert_eq "I2: full replicate removes it (nexus owns it)" "no" "$(yn test -d "$N/.claude/session-replica/mac/$G")"
+
+# ── I3: a fail-closed reconcile is visible in the scan's output ──────────────
+Z=f3f3f3f3-1111-2222-3333-444444444444
+ZF=$(mk_session mac "$Z" "$M/projects/tpg/rakam")
+on mac session-metastore set "$Z" owner '"nexus"'
+on mac session-metastore set "$Z" fingerprint "$(session-fingerprint "$ZF")"
+on mac session-hub-push "z" >/dev/null 2>&1
+echo garbage > "$M/.agents.json"
+err=$(on mac session-index-scan 2>&1 >/dev/null || true)
+echo '[]' > "$M/.agents.json"
+assert_eq "I3: reconcile failure reaches the scan's stderr" "yes" "$(yn grep -q illisible <<<"$err")"
+
 machines_teardown

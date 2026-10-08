@@ -87,14 +87,21 @@ for f in "$CLAUDE_DIR"/projects/*/*.jsonl; do
   LOCAL+=("$(basename "$f" .jsonl)")
   replicate_one "$f" || echo "session-replicate: $(basename "$f") failed" >&2
 done
-# Prune: replica of a session no longer here, unless another machine took it
-# over (session-migrate removes that replica itself once the migration is pushed).
-# Never prune when the local list looks broken (projects/ missing or empty).
-[ -d "$CLAUDE_DIR/projects" ] && [ "${#LOCAL[@]}" -gt 0 ] || exit 0
+# Prune:
+#   - a replica of a session the replica host ($TO) now owns: it migrated there
+#     (from this replica, while this machine slept), and the Stop hook — which
+#     skips the hub sync — may have recreated it since
+#   - a replica of a session no longer here, unless another machine took it
+#     over (session-migrate removes that replica itself once the migration is
+#     pushed). Never when the local list looks broken (projects/ missing or empty).
+LOCAL_OK=""; [ -d "$CLAUDE_DIR/projects" ] && [ "${#LOCAL[@]}" -gt 0 ] && LOCAL_OK=1
 while IFS= read -r sid; do
   valid_id "$sid" || continue
-  case " ${LOCAL[*]} " in *" $sid "*) continue ;; esac
   owner=$(session-metastore get "$sid" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')
-  [ -z "$owner" ] || [ "$owner" = "$THIS" ] || continue
+  if [ "$owner" != "$TO" ]; then
+    [ -n "$LOCAL_OK" ] || continue
+    case " ${LOCAL[*]} " in *" $sid "*) continue ;; esac
+    [ -z "$owner" ] || [ "$owner" = "$THIS" ] || continue
+  fi
   ssh "${SSH_OPTS[@]}" "$PEER" "rm -rf '.claude/session-replica/$THIS/$sid'" || true
 done < <(ssh "${SSH_OPTS[@]}" "$PEER" "ls '.claude/session-replica/$THIS' 2>/dev/null" || true)

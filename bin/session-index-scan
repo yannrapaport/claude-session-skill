@@ -21,7 +21,9 @@ mkdir -p "$HUB_DIR"
 # index, and the push below fast-forwards. Best-effort: offline still scans locally.
 session-hub-sync >/dev/null 2>&1 || true
 # Settle copies of sessions migrated away before indexing what remains.
-session-reconcile >/dev/null 2>&1 || true
+# Its stderr goes to the scan's log: a fail-closed reconcile (claude not on
+# the launchd/cron PATH → supervisor unreadable) must not be silent.
+session-reconcile >/dev/null || echo "session-index-scan: session-reconcile a échoué" >&2
 DIVERGED="${CLAUDE_DIR}/session-diverged.json"
 
 # Build a TSV of live sessions:
