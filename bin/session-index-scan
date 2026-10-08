@@ -20,6 +20,9 @@ mkdir -p "$HUB_DIR"
 # Pull the hub first so we rebuild our subtree on top of other machines' latest
 # index, and the push below fast-forwards. Best-effort: offline still scans locally.
 session-hub-sync >/dev/null 2>&1 || true
+# Settle copies of sessions migrated away before indexing what remains.
+session-reconcile >/dev/null 2>&1 || true
+DIVERGED="${CLAUDE_DIR}/session-diverged.json"
 
 # Build a TSV of live sessions:
 #   sid \t cwd \t mtime \t title \t subject \t turns \t size_kb \t git_branch
@@ -52,9 +55,13 @@ PY
   printf '%s\t%s\t%s\t%s\t%s\n' "$sid" "$cwd" "$mtime" "$meta" "$subj" >> "$TSV"
 done
 
-python3 - "$REGISTRY" "$MACHINE" "$HOME_DIR" "$TSV" << 'PYEOF'
+python3 - "$REGISTRY" "$MACHINE" "$HOME_DIR" "$TSV" "$DIVERGED" << 'PYEOF'
 import json, os, sys
-registry, machine, home, tsv = sys.argv[1:5]
+registry, machine, home, tsv, div_path = sys.argv[1:6]
+try:
+    diverged = set(json.load(open(div_path)))
+except (OSError, ValueError, TypeError):
+    diverged = set()
 data = {"version": 2, "machines": {}}
 if os.path.exists(registry):
     try: data = json.load(open(registry))
@@ -100,6 +107,7 @@ for raw in open(tsv):
         "cc_subject": cc_subject,
         "cc_rel": cc_rel,
         "status": p.get("status", "active"),
+        "diverged": sid in diverged,
     }
 machines[machine] = new   # entries not in `seen` are dropped => pruning
 # atomic write

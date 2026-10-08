@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# session-diverge <session-id> — settle a diverged local copy: the session was
+# migrated away, but this copy kept going (lid closed mid-turn, or resumed by hand).
+#   g  keep both: this copy carries on under a new id (--fork-session), the
+#      original local file goes to the trash once the fork's transcript exists
+#   c  put this local copy in the trash
+# Refuses a session running here, or whose supervisor state is unreadable.
+set -euo pipefail
+SID="${1:?usage: session-diverge <session-id>}"
+[[ "$SID" =~ ^[0-9a-fA-F-]+$ ]] || { echo "session-diverge: identifiant invalide « $SID »" >&2; exit 1; }
+SHORT="${SID:0:8}"
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
+OWNER=$(session-metastore get "$SID" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner","?"))')
+shopt -s nullglob
+F=("$CLAUDE_DIR"/projects/*/"$SID".jsonl)
+[ ${#F[@]} -gt 0 ] || { echo "$SHORT n'est plus ici." >&2; exit 0; }
+ST=$(session-agents-state "$SID") || { echo "session-diverge: état de $SHORT illisible — rien de fait" >&2; exit 1; }
+[ "$ST" != running ] || { echo "session-diverge: $SHORT tourne — arrête-la d'abord (claude stop $SHORT)" >&2; exit 1; }
+echo "⚠ $SHORT : cette copie a continué après sa migration vers $OWNER."
+echo "  [g] garder les deux — cette copie repart sous un nouvel id"
+echo "  [c] mettre cette copie à la corbeille"
+c=""; read -r -p "Choix [g/c] : " c || true
+case "$c" in
+  g)
+    CWD=$(session-jsonl-cwd "${F[0]}")
+    [ -n "$CWD" ] && [ -d "$CWD" ] || { echo "répertoire de $SHORT introuvable (${CWD:-?}) — rien de fait" >&2; exit 1; }
+    OUT=$(cd "$CWD" && "$CLAUDE" --resume "$SID" --fork-session --bg) || { echo "fork impossible : $OUT" >&2; exit 1; }
+    NEW=$(printf '%s\n' "$OUT" | sed -n 's/.*backgrounded · \([0-9a-f]\{8\}\).*/\1/p' | head -1)
+    [ -n "$NEW" ] || { echo "fork impossible : $OUT" >&2; exit 1; }
+    N=()
+    for _ in $(seq 1 20); do       # the fork writes its transcript asynchronously
+      N=("$CLAUDE_DIR"/projects/*/"$NEW"*.jsonl); [ ${#N[@]} -gt 0 ] && break; sleep 0.5
+    done
+    [ ${#N[@]} -gt 0 ] || { echo "la copie $NEW n'apparaît pas — rien n'est déplacé" >&2; exit 1; }
+    session-trash "$SID" || { echo "copie $NEW créée, mais $SHORT n'a pas pu aller à la corbeille — laissée en place" >&2; exit 1; }
+    echo "✓ copie locale devenue $NEW" ;;
+  c) session-trash "$SID" || { echo "$SHORT n'a pas pu aller à la corbeille — laissée en place" >&2; exit 1; } ;;
+  *) echo "rien de fait." ;;
+esac
+session-reconcile "$SID" >/dev/null 2>&1 || true
