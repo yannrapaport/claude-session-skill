@@ -50,15 +50,34 @@ if ssh -n -o ConnectTimeout=3 -o BatchMode=yes "$PEER" true 2>/dev/null; then
     || { say "état de $SHORT sur $OWNER illisible — migration annulée"; exit 1; }
   if [ "$ST" = running ]; then
     confirm "$SHORT tourne sur $OWNER. L'arrêter et la migrer ?" || exit 1
-    ssh "${SSH_OPTS[@]}" "$PEER" "$RPATH \$(session-config claude_bin 2>/dev/null || echo claude) stop $SHORT" >/dev/null
+    ssh "${SSH_OPTS[@]}" "$PEER" "$RPATH \$(session-config claude_bin 2>/dev/null || echo claude) stop $SHORT" >/dev/null \
+      || { say "arrêt de $SHORT sur $OWNER impossible — migration annulée"; exit 1; }
+    # Copy only once the source has really let go of the transcript.
+    WAIT=${SESSION_STOP_WAIT:-10}; i=0
+    while :; do
+      ST=$(ssh "${SSH_OPTS[@]}" "$PEER" "$RPATH session-agents-state $SID") \
+        || { say "état de $SHORT sur $OWNER illisible — migration annulée"; exit 1; }
+      [ "$ST" = running ] || break
+      i=$((i + 1))
+      [ "$i" -lt $((WAIT * 2)) ] || { say "$SHORT tourne toujours sur $OWNER — migration annulée"; exit 1; }
+      sleep 0.5
+    done
   fi
   SCWD=$(echo "$SRCE" | jget cwd)
   [ -n "$SCWD" ] || { say "$SHORT : répertoire source inconnu (scan de $OWNER pas encore passé ?)"; exit 1; }
   SENC=$(session-encode-path "$SCWD")
   rsync -a -e "$RSH" "$PEER:.claude/projects/$SENC/$SID.jsonl" "$STAGE/" || { say "copie depuis $OWNER impossible"; exit 1; }
-  rsync -a -e "$RSH" "$PEER:.claude/projects/$SENC/$SID" "$STAGE/" 2>/dev/null || true
-  mkdir -p "$STAGE/file-history"
-  rsync -a -e "$RSH" "$PEER:.claude/file-history/$SID/" "$STAGE/file-history/" 2>/dev/null || true
+  # All parts or nothing: ask which optional parts exist, then any copy error aborts.
+  PARTS=$(ssh "${SSH_OPTS[@]}" "$PEER" "test -d .claude/projects/$SENC/$SID && echo dir; test -d .claude/file-history/$SID && echo fh; true") \
+    || { say "copie depuis $OWNER impossible"; exit 1; }
+  if grep -qx dir <<<"$PARTS"; then
+    rsync -a -e "$RSH" "$PEER:.claude/projects/$SENC/$SID/" "$STAGE/$SID/" \
+      || { say "copie de $SID/ depuis $OWNER impossible — migration annulée"; exit 1; }
+  fi
+  if grep -qx fh <<<"$PARTS"; then
+    rsync -a -e "$RSH" "$PEER:.claude/file-history/$SID/" "$STAGE/file-history/" \
+      || { say "copie de file-history/$SID depuis $OWNER impossible — migration annulée"; exit 1; }
+  fi
   INFO="$SRCE"
 else
   REP="$CLAUDE_DIR/session-replica/$OWNER/$SID"
@@ -66,33 +85,54 @@ else
   INFO=$(cat "$REP/source.json")
   say "$OWNER injoignable — réplique du $(echo "$INFO" | jget replicated_at), dernière activité connue sur $OWNER : $(echo "$SRCE" | jget last_activity)"
   confirm "Migrer depuis la réplique ?" || exit 1
-  cp -R "$REP/." "$STAGE/"; rm -f "$STAGE/source.json"
+  cp -R "$REP/." "$STAGE/" || { say "copie de la réplique impossible — migration annulée"; exit 1; }
+  rm -f "$STAGE/source.json"
 fi
 
 TCWD=$(session-target-cwd "$(echo "$INFO" | jget cc_subject)" "$(echo "$INFO" | jget cc_rel)" \
        "$(echo "$INFO" | jget project_relative)") || exit 1
 DEST="$CLAUDE_DIR/projects/$(session-encode-path "$TCWD")"
 
+META="meta/$SID.json"
+META_BAK="$STAGE/meta.bak"; META_SET=""
+DEST_NEW=""; [ -d "$DEST" ] || DEST_NEW=1
+INSTALLED=()
+# Undo everything this run did: installed copies, our meta edit, a project dir
+# we created (rmdir only: never remove a directory we did not create).
+rollback() {
+  [ ${#INSTALLED[@]} -eq 0 ] || rm -rf "${INSTALLED[@]}"
+  if [ -n "$META_SET" ]; then
+    git -C "$HUB_DIR" reset -q -- "$META" 2>/dev/null || true
+    if [ -f "$META_BAK" ]; then cp "$META_BAK" "$HUB_DIR/$META"; else rm -f "$HUB_DIR/$META"; fi
+  fi
+  [ -z "$DEST_NEW" ] || rmdir "$DEST" 2>/dev/null || true
+  say "migration annulée : $1"; exit 1
+}
 mkdir -p "$DEST" "$CLAUDE_DIR/session-cwd-override"
-INSTALLED=("$DEST/$SID.jsonl")
-mv "$STAGE/$SID.jsonl" "$DEST/"
-[ -d "$STAGE/$SID" ] && { mv "$STAGE/$SID" "$DEST/"; INSTALLED+=("$DEST/$SID"); }
+INSTALLED+=("$DEST/$SID.jsonl")
+mv "$STAGE/$SID.jsonl" "$DEST/" || rollback "installation impossible"
+if [ -d "$STAGE/$SID" ]; then
+  INSTALLED+=("$DEST/$SID"); mv "$STAGE/$SID" "$DEST/" || rollback "installation impossible"
+fi
 if [ -n "$(ls -A "$STAGE/file-history" 2>/dev/null)" ]; then
   mkdir -p "$CLAUDE_DIR/file-history"
-  mv "$STAGE/file-history" "$CLAUDE_DIR/file-history/$SID"; INSTALLED+=("$CLAUDE_DIR/file-history/$SID")
+  INSTALLED+=("$CLAUDE_DIR/file-history/$SID")
+  mv "$STAGE/file-history" "$CLAUDE_DIR/file-history/$SID" || rollback "installation impossible"
 fi
-rollback() { rm -rf "${INSTALLED[@]}"; say "migration annulée : $1"; exit 1; }
 
 FP=$(session-fingerprint "$DEST/$SID.jsonl")
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+[ ! -f "$HUB_DIR/$META" ] || cp "$HUB_DIR/$META" "$META_BAK"
+META_SET=1
 session-metastore set "$SID" owner "\"$THIS\""
 session-metastore set "$SID" migrated_from "\"$OWNER\""
 session-metastore set "$SID" migrated_at "\"$NOW\""
 session-metastore set "$SID" fingerprint "$FP"
-git -C "$HUB_DIR" add -A
-git -C "$HUB_DIR" commit -qm "migrate: $SHORT $OWNER → $THIS" || rollback "commit du hub impossible"
+# Commit only our meta file: unrelated local hub edits stay as they are.
+git -C "$HUB_DIR" add -- "$META" || rollback "commit du hub impossible"
+git -C "$HUB_DIR" commit -qm "migrate: $SHORT $OWNER → $THIS" -- "$META" || rollback "commit du hub impossible"
 if ! git -C "$HUB_DIR" push -q origin HEAD 2>/dev/null; then
-  git -C "$HUB_DIR" reset -q --hard HEAD~1
+  git -C "$HUB_DIR" reset -q --soft HEAD~1      # drop our commit only
   rollback "push du hub refusé"
 fi
 echo "$TCWD" > "$CLAUDE_DIR/session-cwd-override/$SID"

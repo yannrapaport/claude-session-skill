@@ -3,6 +3,7 @@
 #   machines_setup          $MTMP with mac/ and nexus/ homes, a bare hub, stubs
 #   on <machine> <cmd...>   run cmd as that machine (HOME, config, hub, claude dir)
 #   down <m> / up <m>       make ssh/rsync to <m> fail / succeed
+#   $MTMP/fail.rsync        every rsync fails; fail.rsync.match <substr>: only matching ones
 #   machines_teardown
 # Resolved once, and never to a previous run'"'"'s stub dir left on PATH.
 REAL_RSYNC=${REAL_RSYNC:-$(PATH=$(printf %s "$PATH" | tr : '\n' | grep -v '/stub$' | paste -sd: -) command -v rsync || true)}
@@ -59,6 +60,11 @@ EOF
 #!/usr/bin/env bash
 # rsync stub: "<peer>:<path>" → $MTMP/<peer>/<path> (relative paths from that home).
 [ -e "$MTMP/fail.rsync" ] && { echo "rsync: simulated failure" >&2; exit 23; }
+# fail.rsync.match: fail only when an argument contains that substring.
+if [ -s "$MTMP/fail.rsync.match" ]; then
+  m=$(cat "$MTMP/fail.rsync.match")
+  for a in "$@"; do [[ "$a" == *"$m"* ]] && { echo "rsync: simulated failure ($m)" >&2; exit 23; }; done
+fi
 args=()
 while [ $# -gt 0 ]; do
   a="$1"; shift
