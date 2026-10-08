@@ -92,4 +92,42 @@ assert_eq "diverge running: kept"      "yes" "$([ -f "$FG" ] && echo yes || echo
 echo '[]' > "$M/.agents.json"
 echo c | on mac session-diverge "$G" >/dev/null 2>&1
 assert_eq "diverge c: trashed"         "yes" "$(in_trash "$G")"
+
+# Keep both, but the fork's transcript never appears → nothing moved.
+H=88880000-1111-2222-3333-444444444444
+FH=$(mk_session mac "$H" "$M/projects/tpg/rakam"); own_elsewhere "$H" "$FH"; echo '{"uuid":"late"}' >> "$FH"
+rm -f "$(dirname "$FH")"/f0f0f0f0-*.jsonl; touch "$MTMP/nofork"
+rc=0; echo g | on mac session-diverge "$H" >/dev/null 2>&1 || rc=$?
+rm -f "$MTMP/nofork"
+assert_eq "keep both, no fork: fails"         "1"   "$rc"
+assert_eq "keep both, no fork: original kept" "yes" "$([ -f "$FH" ] && echo yes || echo no)"
+
+# Supervisor, several ids in one read.
+echo "[{\"sessionId\":\"$C\",\"pid\":7},{\"sessionId\":\"$D\",\"state\":\"stopped\"}]" > "$M/.agents.json"
+assert_eq "agents-state multi-id" "$C running|$D stopped|$E unknown" \
+  "$(on mac session-agents-state "$C" "$D" "$E" | paste -sd'|' -)"
+assert_eq "agents-state single id unchanged" "running" "$(on mac session-agents-state "$C")"
+echo garbage > "$M/.agents.json"
+rc=0; out=$(on mac session-agents-state "$C" "$D" 2>/dev/null) || rc=$?
+assert_eq "agents-state multi-id error" "1 error" "$rc $out"
+echo '[]' > "$M/.agents.json"
+
+# Same id under two project dirs → diverged, neither copy trashed.
+I=77770000-1111-2222-3333-444444444444
+FI=$(mk_session mac "$I" "$M/projects/tpg/rakam"); own_elsewhere "$I" "$FI"
+mkdir -p "$M/projects/tpg/other"; FI2=$(mk_session mac "$I" "$M/projects/tpg/other")
+on mac session-reconcile >/dev/null 2>&1
+assert_eq "duplicate id → both kept"   "yes yes" "$([ -f "$FI" ] && echo yes || echo no) $([ -f "$FI2" ] && echo yes || echo no)"
+assert_eq "duplicate id → diverged"    "yes" "$(diverged_list | tr ' ' '\n' | grep -qx "$I" && echo yes || echo no)"
+
+# A malformed meta entry is skipped, the rest is still settled.
+J=66660000-1111-2222-3333-444444444444
+FJ=$(mk_session mac "$J" "$M/projects/tpg/rakam"); own_elsewhere "$J" "$FJ"
+K=55550000-1111-2222-3333-444444444444
+FK=$(mk_session mac "$K" "$M/projects/tpg/rakam")
+echo '[]' > "$M/.claude/session-hub/meta/$K.json"
+rc=0; on mac session-reconcile >/dev/null 2>&1 || rc=$?
+assert_eq "malformed meta → run ok"      "0"   "$rc"
+assert_eq "malformed meta → kept"        "yes" "$([ -f "$FK" ] && echo yes || echo no)"
+assert_eq "malformed meta → others done" "no"  "$([ -f "$FJ" ] && echo yes || echo no)"
 machines_teardown

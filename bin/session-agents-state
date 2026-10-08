@@ -1,28 +1,36 @@
 #!/usr/bin/env bash
-# session-agents-state <session-id> — what this machine's Claude supervisor
-# knows of a session:
+# session-agents-state <session-id> [<session-id>...] — what this machine's
+# Claude supervisor knows of sessions (one supervisor read for all ids):
 #   running  an active process holds it (entry carries a pid or a status)
 #   stopped  a background session it remembers, not running (state stopped/done)
 #   unknown  never backgrounded here
 #   error    the supervisor could not be read (command failed or output not
 #            JSON): prints `error`, message on stderr, exit 1 — callers must
 #            not treat this as `unknown`
+# One id: prints the state alone. Several ids: one line `<id> <state>` per id.
 set -euo pipefail
+[ $# -gt 0 ] || { echo "usage: session-agents-state <session-id> [<session-id>...]" >&2; exit 2; }
 CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
 OUT=$("$CLAUDE" agents --json --all 2>/dev/null) || OUT=""
 printf '%s' "$OUT" | python3 -c '
 import json, sys
-sid = sys.argv[1]
+ids = sys.argv[1:]
 try:
     d = json.load(sys.stdin)
-except ValueError:
+    d = d if isinstance(d, list) else d.get("sessions", [])
+except (ValueError, AttributeError):
     print("error"); print("session-agents-state: superviseur Claude illisible", file=sys.stderr); sys.exit(1)
-d = d if isinstance(d, list) else d.get("sessions", [])
-st = "unknown"
-for s in d:
-    if s.get("sessionId") != sid:
-        continue
-    if "pid" in s or s.get("status"):
-        st = "running"; break
-    st = "stopped"
-print(st)' "$1"
+def state(sid):
+    st = "unknown"
+    for s in d:
+        if not isinstance(s, dict) or s.get("sessionId") != sid:
+            continue
+        if "pid" in s or s.get("status"):
+            return "running"
+        st = "stopped"
+    return st
+if len(ids) == 1:
+    print(state(ids[0]))
+else:
+    for i in ids:
+        print(i, state(i))' "$@"

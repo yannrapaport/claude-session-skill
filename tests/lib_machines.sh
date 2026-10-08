@@ -84,7 +84,8 @@ EOF
   cat > "$MTMP/stub/claude" <<'EOF'
 #!/usr/bin/env bash
 # claude stub: logs "<machine> <argv>" to $MTMP/claude.log.
-# agents → $HOME/.agents.json. --resume --fork-session --bg → creates a fork file.
+# agents → $HOME/.agents.json. --resume --fork-session --bg → creates a fork file
+# (unless $MTMP/nofork exists: the backgrounded line is printed, no file appears).
 m=$(basename "$HOME")
 echo "$m $*" >> "$MTMP/claude.log"
 case "$1" in
@@ -92,6 +93,7 @@ case "$1" in
   --resume)
     if [[ " $* " == *" --fork-session "* ]]; then
       enc=$(printf '%s' "$PWD" | sed 's/[^a-zA-Z0-9]/-/g')
+      [ -e "$MTMP/nofork" ] && { echo "backgrounded · f0f0f0f0 (idle — send a prompt to start)"; exit 0; }
       mkdir -p "$HOME/.claude/projects/$enc"
       echo '{"type":"user","entrypoint":"cli","message":{"role":"user","content":"fork"}}' \
         > "$HOME/.claude/projects/$enc/f0f0f0f0-0000-0000-0000-000000000000.jsonl"
