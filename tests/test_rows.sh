@@ -31,18 +31,42 @@ assert_eq "filter: nexus" "mid " "$(on mac session-rows | ids)"
 echo prio > "$SESSIONS_STATE/filter"
 assert_eq "filter: prioritised" "old " "$(on mac session-rows | ids)"
 
+# Character-based slicing (cut -c is byte-based in a C locale).
+cols() { python3 -c 'import sys; print(sys.argv[1][int(sys.argv[2])-1:int(sys.argv[3])])' "$1" "$2" "$3"; }
+marks_of() { cols "$1" 10 12; }
 : > "$SESSIONS_STATE/filter"
 LINE=$(on mac session-rows | awk -F'\t' '$1=="mid"{print $2}')
-case "$LINE" in *"⚠"*) r=yes ;; *) r=no ;; esac
+case "$(cols "$LINE" 10 12)" in *"⚠"*) r=yes ;; *) r=no ;; esac
 assert_eq "diverged marker" "yes" "$r"
 echo '[{"sessionId":"new","pid":1,"status":"idle"}]' > "$MTMP/mac/.agents.json"
 LINE=$(on mac session-rows | awk -F'\t' '$1=="new"{print $2}')
-case "$LINE" in *"●"*) r=yes ;; *) r=no ;; esac
+case "$(cols "$LINE" 10 12)" in *"●"*) r=yes ;; *) r=no ;; esac
 assert_eq "running marker" "yes" "$r"
-# Owner from meta wins over the observing machine.
+# Markers sit at fixed cols 10-12 (after badge, age, owner initial).
+LINE=$(on mac session-rows | awk -F'\t' '$1=="new"{print $2}')
+assert_eq "no replica, owner==machine: no ⇢" "no" "$(case "$(marks_of "$LINE")" in *⇢*) echo yes;; *) echo no;; esac)"
+R="$MTMP/mac/.claude/session-replica/mac/new"; mkdir -p "$R"
+echo '{"replicated_at": "2026-10-01T00:00:00Z"}' > "$R/source.json"
+LINE=$(on mac session-rows | awk -F'\t' '$1=="new"{print $2}')
+assert_eq "older replica: ⇢" "yes" "$(case "$(marks_of "$LINE")" in *⇢*) echo yes;; *) echo no;; esac)"
+echo '{"replicated_at": "2026-10-09T00:00:00+00:00"}' > "$R/source.json"
+LINE=$(on mac session-rows | awk -F'\t' '$1=="new"{print $2}')
+assert_eq "newer replica: no ⇢" "no" "$(case "$(marks_of "$LINE")" in *⇢*) echo yes;; *) echo no;; esac)"
+python3 - "$H/registry.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d["machines"]["mac"]["ws"] = {"cwd": "/w", "project_relative": "w", "cc_subject": "", "cc_rel": "",
+    "last_activity": "2026-10-02T10:00:00Z", "title": "a\tb\nc", "turns": 1, "status": "active"}
+json.dump(d, open(p, "w"))
+PYEOF
+# Title with TAB/newline stays on one line with exactly one TAB.
+N=$(on mac session-rows | grep -c '^ws'$'\t' || true)
+T=$(on mac session-rows | grep '^ws'$'\t' | tr -cd '\t' | wc -c | tr -d ' ')
+assert_eq "sanitized title: one line" "1" "$N"
+assert_eq "sanitized title: one TAB" "1" "$T"
+# Owner from meta wins over the observing machine (owner initial = col 9).
 on mac session-metastore set old owner '"nexus"'
 LINE=$(on mac session-rows | awk -F'\t' '$1=="old"{print $2}')
-case "$LINE" in *" n "*) r=yes ;; *) r=no ;; esac
-assert_eq "owner from meta" "yes" "$r"
+assert_eq "owner from meta" "n" "$(cols "$LINE" 9 9)"
 unset SESSIONS_STATE
 machines_teardown

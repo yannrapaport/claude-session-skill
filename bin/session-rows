@@ -5,7 +5,7 @@
 #   scope    subject | all                      (default all)
 #   subject  cc subject used when scope=subject
 #   filter   "" | prio | mac | nexus
-# Display: priority · age · owner (m/n) · subject · title · markers
+# Display: priority · age · owner (m/n) + markers · subject · title
 #   ● running here   ⇢ replica older than the source's last activity   ⚠ diverged
 set -euo pipefail
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
@@ -19,17 +19,21 @@ session-metastore all > "$META"
 "$CLAUDE" agents --json --all > "$AG" 2>/dev/null || echo '[]' > "$AG"
 python3 - "$VIEW" "$META" "$AG" "${SESSIONS_STATE:-}" "$CLAUDE_DIR" << 'PYEOF'
 import json, os, signal, sys
-from datetime import datetime
+from datetime import datetime, timezone
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 view, meta, ag, state, claude_dir = sys.argv[1:6]
 rows = json.load(open(view))
 meta = json.load(open(meta))
 try:
     agents = json.load(open(ag))
-    agents = agents if isinstance(agents, list) else agents.get("sessions", [])
+    if isinstance(agents, dict):
+        agents = agents.get("sessions")
+    if not isinstance(agents, list):
+        agents = []
 except ValueError:
     agents = []
-running = {a.get("sessionId") for a in agents if "pid" in a or a.get("status")}
+running = {a.get("sessionId") for a in agents
+           if isinstance(a, dict) and ("pid" in a or a.get("status"))}
 
 def st(name, default=""):
     if not state:
@@ -48,10 +52,12 @@ for r in rows:
     m = meta.get(r["id"], {})
     r["owner"] = m.get("owner") or r.get("machine", "?")
     r["priority"] = m.get("priority", "")
+    r["last_activity"] = r.get("last_activity") or ""
     r["proj"] = r.get("cc_subject") or (r.get("project_relative") or "~").split("/")[-1]
     rel = r.get("cc_rel") or ""
     if r.get("cc_subject") and rel and not rel.startswith("."):
         r["proj"] += "/" + rel.split("/")[0]
+    r["proj"] = " ".join(str(r["proj"]).split())   # one line, no TAB/newline
 
 if scope == "subject" and subject:
     rows = [r for r in rows if r.get("cc_subject") == subject]
@@ -60,18 +66,25 @@ if filt == "prio":
 elif filt in ("mac", "nexus"):
     rows = [r for r in rows if r["owner"] == filt]
 
-rows.sort(key=lambda r: r.get("last_activity", ""), reverse=True)   # stable base
+rows.sort(key=lambda r: r["last_activity"], reverse=True)   # stable base
 if sort == "project":
     rows.sort(key=lambda r: r["proj"])
 elif sort == "priority":
     rows.sort(key=lambda r: RANK.get(r["priority"], 3))
 
-def age(iso):
+def parse(iso):
+    """ISO string -> aware datetime (naive = UTC); None if unparsable."""
     try:
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+def age(iso):
+    dt = parse(iso)
+    if dt is None:
         return "?"
-    s = (datetime.now(dt.tzinfo) - dt).total_seconds()
+    s = (datetime.now(timezone.utc) - dt).total_seconds()
     for unit, n in (("j", 86400), ("h", 3600), ("m", 60)):
         if s >= n:
             return f"{int(s // n)}{unit}"
@@ -80,10 +93,13 @@ def age(iso):
 def replica_lag(r):
     src = os.path.join(claude_dir, "session-replica", r.get("machine", ""), r["id"], "source.json")
     try:
-        rep = json.load(open(src)).get("replicated_at", "")
+        data = json.load(open(src))
     except (OSError, ValueError):
         return False
-    return rep < r.get("last_activity", "")
+    if not isinstance(data, dict):
+        return False
+    rep, act = parse(data.get("replicated_at")), parse(r["last_activity"])
+    return rep is not None and act is not None and rep < act
 
 for r in rows:
     marks = ""
@@ -93,8 +109,9 @@ for r in rows:
         marks += "⇢"
     if r.get("diverged"):
         marks += "⚠"
-    title = r.get("title") or r.get("subject") or "—"
-    line = (f"{BADGE.get(r['priority'], '  ')} {age(r.get('last_activity', '')):>4} "
-            f"{r['owner'][:1]} {r['proj'][:12]:<12} {title} {marks}").rstrip()
+    title = " ".join(str(r.get("title") or r.get("subject") or "—").split())
+    # Markers right after the owner initial (fixed 3 cols) so a narrow pane never clips them.
+    line = (f"{BADGE.get(r['priority'], '  ')} {age(r['last_activity']):>4} "
+            f"{r['owner'][:1]}{marks:<3} {r['proj'][:12]:<12} {title}").rstrip()
     print(f"{r['id']}\t{line}")
 PYEOF
