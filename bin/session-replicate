@@ -48,7 +48,7 @@ replicate_one() {
   local dst=".claude/session-replica/$THIS/$sid"
   # source.json is built first so its size is the one measured before the copy.
   local cwd sr title src
-  cwd=$(session-jsonl-cwd "$f")
+  cwd=$(session-cwd "$f")
   sr=$(session-subject-of "$cwd" || true)
   title=$(session-meta "$f" | cut -f2)
   src=$(mktemp)

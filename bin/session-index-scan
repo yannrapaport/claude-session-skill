@@ -32,7 +32,7 @@ shopt -s nullglob
 SKIPPED=0
 for f in "$CLAUDE_DIR"/projects/*/*.jsonl; do
   sid=$(basename "$f" .jsonl)
-  cwd=$(session-jsonl-cwd "$f")
+  cwd=$(session-cwd "$f")
   [ -z "$cwd" ] && continue   # cannot place a session with no recorded cwd
   # Keep the meta line whole: `read -r` with IFS=tab would coalesce runs of
   # tabs and strip leading ones, so empty fields (a session with no title, no

@@ -119,6 +119,9 @@ META="meta/$SID.json"
 META_BAK="$STAGE/meta.bak"; META_SET=""
 DEST_NEW=""; [ -d "$DEST" ] || DEST_NEW=1
 INSTALLED=()
+# Where it lives here: the transcript keeps the source's cwd, every local
+# reader (session-cwd) takes this override instead.
+OVR="$CLAUDE_DIR/session-cwd-override/$SID"; OVR_SET=""
 # Undo everything this run did: installed copies (only paths that did not
 # exist before), our meta edit, a project dir we created (rmdir only).
 rollback() {
@@ -126,6 +129,9 @@ rollback() {
   if [ -n "$META_SET" ]; then
     git -C "$HUB_DIR" reset -q -- "$META" 2>/dev/null || true
     if [ -f "$META_BAK" ]; then cp "$META_BAK" "$HUB_DIR/$META"; else rm -f "$HUB_DIR/$META"; fi
+  fi
+  if [ -n "$OVR_SET" ]; then
+    if [ -f "$STAGE/override.bak" ]; then cp "$STAGE/override.bak" "$OVR"; else rm -f "$OVR"; fi
   fi
   [ -z "$DEST_NEW" ] || rmdir "$DEST" 2>/dev/null || true
   say "migration annulée : $1"; exit 1
@@ -143,6 +149,10 @@ if [ -n "$(ls -A "$STAGE/file-history" 2>/dev/null)" ]; then
   mkdir -p "$CLAUDE_DIR/file-history" || rollback "installation impossible"
   install_part "$STAGE/file-history" "$CLAUDE_DIR/file-history/$SID"
 fi
+
+if [ -f "$OVR" ]; then cp "$OVR" "$STAGE/override.bak" || rollback "sauvegarde de $OVR impossible"; fi
+OVR_SET=1
+echo "$TCWD" > "$OVR" || rollback "écriture de $OVR impossible"
 
 FP=$(session-fingerprint "$DEST/$SID.jsonl") || rollback "empreinte impossible"
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ) || rollback "date impossible"
@@ -175,7 +185,6 @@ if ! git -C "$HUB_DIR" push -q origin HEAD 2>/dev/null; then
   fi
 fi
 session-hub-lock release "$TOKEN"; TOKEN=""
-echo "$TCWD" > "$CLAUDE_DIR/session-cwd-override/$SID"
 if [ -n "$UNSURE" ]; then
   # Keep the replica and leave the source alone until the hub confirms.
   say "⚠ push du hub non vérifiable — la migration de $SHORT est probablement enregistrée ; le commit local partira au prochain push, qui la confirmera"

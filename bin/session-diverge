@@ -42,7 +42,7 @@ echo "  [c] mettre cette copie à la corbeille"
 c=""; read -r -p "Choix [g/c] : " c || true
 case "$c" in
   g)
-    CWD=$(session-jsonl-cwd "${F[0]}")
+    CWD=$(session-cwd "${F[0]}")
     [ -n "$CWD" ] && [ -d "$CWD" ] || { echo "répertoire de $SHORT introuvable (${CWD:-?}) — rien de fait" >&2; exit 1; }
     BEFORE=$(agent_ids) || { echo "superviseur Claude illisible — rien de fait" >&2; exit 1; }
     # Its output is colored even when piped: the fork is found in the supervisor instead.
