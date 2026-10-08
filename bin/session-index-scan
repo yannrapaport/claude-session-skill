@@ -112,3 +112,5 @@ print(f"Indexed {len(new)} session(s) for {machine}.")
 PYEOF
 if [ "$SKIPPED" -gt 0 ]; then echo "Skipped $SKIPPED headless transcript(s)."; fi
 session-hub-push "index: $MACHINE $(date -u +%Y-%m-%dT%H:%MZ)" || true
+# Catch-up replication (Mac → Nexus); no-op where replica_to is unset.
+session-replicate >/dev/null 2>&1 || true

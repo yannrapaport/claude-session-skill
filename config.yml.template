@@ -13,6 +13,10 @@ subjects_file: /Users/youruser/projects/admin/cc/subjects.zsh   # CC_DIRS shared
 peer_nexus: yann@nexus
 peer_mac: yann@the-product-guy
 
+# Mac only: keep a replica of this machine's sessions on that peer, so a
+# migration can be made from there while this machine is asleep.
+replica_to: nexus
+
 # Garbage collection tunables (hours / days). Omit to use the defaults shown.
 gc_process_idle_hours: 6     # kill spare/orphan claude processes idle longer than this
 gc_archive_days: 10          # archive sessions inactive longer than this
