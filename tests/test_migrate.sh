@@ -110,6 +110,79 @@ rc=0; on nexus session-migrate "$H" --yes >/dev/null 2>&1 || rc=$?
 assert_eq "all parts: migrates" "0" "$rc"
 assert_eq "all parts: file-history installed" "v1" "$(cat "$N/.claude/file-history/$H/f@v1" 2>/dev/null)"
 
+# Target can't land here + source running → refused before stopping anything.
+K=dededede-1111-2222-3333-444444444444
+KF=$(mk_session mac "$K" "$M/projects/tpg/rakam")
+mkdir -p "${KF%.jsonl}/tool-results"; echo r > "${KF%.jsonl}/tool-results/t1"
+on mac session-index-scan >/dev/null 2>&1
+echo "[{\"sessionId\": \"$K\", \"pid\": 4242}]" > "$M/.agents.json"
+mv "$N/projects/tpg" "$N/projects/tpg.off"
+rc=0; on nexus env SESSION_STOP_WAIT=1 session-migrate "$K" --yes >/dev/null 2>&1 || rc=$?
+mv "$N/projects/tpg.off" "$N/projects/tpg"
+echo '[]' > "$M/.agents.json"
+assert_eq "target missing + running: refused" "1" "$rc"
+assert_eq "target missing + running: source not stopped" "no" "$(grep -q "^mac stop ${K:0:8}" "$MTMP/claude.log" && echo yes || echo no)"
+
+# Orphan <id>/ dir at the destination → refused, orphan untouched.
+mkdir -p "$N/.claude/projects/$NENC/$K"; echo mine > "$N/.claude/projects/$NENC/$K/keep"
+rc=0; on nexus session-migrate "$K" --yes >/dev/null 2>&1 || rc=$?
+assert_eq "orphan dir here: refused" "1" "$rc"
+assert_eq "orphan dir here: untouched" "mine" "$(cat "$N/.claude/projects/$NENC/$K/keep" 2>/dev/null)"
+rm -r "$N/.claude/projects/$NENC/$K"
+
+# A failure between install and push rolls everything back, meta included.
+mkdir -p "$OH/meta"; echo '{"priority": "high"}' > "$OH/meta/$K.json"
+git -C "$OH" add "meta/$K.json"; git -C "$OH" commit -qm "prio K" -- "meta/$K.json"; git -C "$OH" push -q origin HEAD
+K0=$(cat "$OH/meta/$K.json")
+mkdir -p "$MTMP/fpfail"; printf '#!/bin/sh\nexit 1\n' > "$MTMP/fpfail/session-fingerprint"
+cat > "$MTMP/fpfail/session-metastore.wrap" <<EOF2
+#!/usr/bin/env bash
+[ "\$1 \${3:-}" = "set fingerprint" ] && exit 1
+exec "$SCRIPT_DIR/../bin/session-metastore" "\$@"
+EOF2
+mkdir -p "$MTMP/msfail"; mv "$MTMP/fpfail/session-metastore.wrap" "$MTMP/msfail/session-metastore"
+chmod +x "$MTMP/fpfail/session-fingerprint" "$MTMP/msfail/session-metastore"
+for d in fpfail msfail; do
+  rc=0; on nexus env PATH="$MTMP/$d:$PATH" session-migrate "$K" --yes >/dev/null 2>&1 || rc=$?
+  assert_eq "$d: refused" "1" "$rc"
+  assert_eq "$d: nothing installed" "no" "$([ -e "$N/.claude/projects/$NENC/$K.jsonl" ] || [ -e "$N/.claude/projects/$NENC/$K" ] && echo yes || echo no)"
+  assert_eq "$d: meta file unchanged" "$K0" "$(cat "$OH/meta/$K.json")"
+  assert_eq "$d: meta not staged or modified" "" "$(git -C "$OH" status --porcelain -- "meta/$K.json")"
+done
+
+# Hub lock held by another writer → migrate and hub-push wait, then refuse.
+mkdir "$OH/.lock"
+SECONDS=0
+rc=0; on nexus env SESSION_LOCK_WAIT=1 session-migrate "$K" --yes >/dev/null 2>&1 || rc=$?
+assert_eq "hub locked: migrate refused" "1" "$rc"
+assert_eq "hub locked: migrate bounded wait" "yes" "$([ "$SECONDS" -le 6 ] && echo yes || echo no)"
+assert_eq "hub locked: nothing installed" "no" "$([ -e "$N/.claude/projects/$NENC/$K.jsonl" ] && echo yes || echo no)"
+assert_eq "hub locked: other's lock kept" "yes" "$([ -d "$OH/.lock" ] && echo yes || echo no)"
+echo '{"x": 1}' > "$OH/meta/zz.json"
+H0=$(git -C "$OH" rev-parse HEAD)
+rc=0; on nexus env SESSION_LOCK_WAIT=1 session-hub-push "zz" >/dev/null 2>&1 || rc=$?
+assert_eq "hub locked: hub-push refused" "1" "$rc"
+assert_eq "hub locked: hub-push committed nothing" "$H0" "$(git -C "$OH" rev-parse HEAD)"
+touch -t 202001010000 "$OH/.lock"           # holder died long ago
+rc=0; on nexus env SESSION_LOCK_WAIT=1 session-hub-push "zz" >/dev/null 2>&1 || rc=$?
+assert_eq "stale lock: taken over" "0" "$rc"
+assert_eq "stale lock: released after push" "no" "$([ -e "$OH/.lock" ] && echo yes || echo no)"
+assert_eq "lock never tracked" "" "$(git -C "$OH" ls-files | grep -F .lock || true)"
+
+# Push reports a failure but reached the hub → the migration stands.
+REALGIT=$(command -v git)
+mkdir -p "$MTMP/gitfail"
+cat > "$MTMP/gitfail/git" <<EOF2
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = push ] && { "$REALGIT" "\$@"; exit 1; }; done
+exec "$REALGIT" "\$@"
+EOF2
+chmod +x "$MTMP/gitfail/git"
+rc=0; on nexus env PATH="$MTMP/gitfail:$PATH" session-migrate "$K" --yes >/dev/null 2>&1 || rc=$?
+assert_eq "push landed despite error: migrates" "0" "$rc"
+assert_eq "push landed despite error: installed" "yes" "$([ -f "$N/.claude/projects/$NENC/$K/tool-results/t1" ] && echo yes || echo no)"
+assert_eq "push landed despite error: owner on hub" "nexus" "$(git -C "$MTMP/hub.git" show "main:meta/$K.json" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')"
+
 # Mac down → migrate from the replica, replica removed afterwards.
 on mac session-replicate "$G"
 down mac
@@ -121,4 +194,11 @@ assert_eq "from replica: replica removed" "no" "$([ -d "$N/.claude/session-repli
 # Trash
 T=$(on nexus session-trash "$G" >/dev/null 2>&1; ls -d "$N"/.claude/session-trash/*/"$G" 2>/dev/null | head -1)
 assert_eq "trash moves the transcript" "yes" "$([ -f "$T/$G.jsonl" ] && echo yes || echo no)"
+# Same id trashed again the same day → a second entry, the first intact.
+G1=$(cat "$T/$G.jsonl")
+mk_session nexus "$G" "$N/projects/tpg/rakam" '{"type":"user","uuid":"second"}' >/dev/null
+on nexus session-trash "$G" >/dev/null 2>&1
+assert_eq "trash twice: two entries" "2" "$(ls -d "$N"/.claude/session-trash/*/"$G"* | wc -l | tr -d ' ')"
+assert_eq "trash twice: first intact" "$G1" "$(cat "$T/$G.jsonl")"
+assert_eq "trash twice: second kept" "yes" "$(grep -lq '"second"' "$N"/.claude/session-trash/*/"$G".*/"$G.jsonl" && echo yes || echo no)"
 machines_teardown

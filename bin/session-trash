@@ -21,6 +21,8 @@ if [ -n "$ASK" ]; then
   [ "$a" = o ] || [ "$a" = O ] || exit 0
 fi
 T="$CLAUDE_DIR/session-trash/$(date +%F)/$SID"
+# Never into an existing entry (same id trashed earlier today): a new one beside it.
+[ ! -e "$T" ] || T="$T.$(date +%H%M%S).$$"
 mkdir -p "$T"
 dirname "${F[0]}" > "$T/origin"            # where it came from, to put it back by hand
 mv "${F[0]}" "$T/"

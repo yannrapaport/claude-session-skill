@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# session-hub-lock acquire|release — mutual exclusion for writers of the local
+# hub clone (session-hub-push, session-migrate). mkdir-based: no flock on macOS.
+#   acquire  wait up to $SESSION_LOCK_WAIT seconds (default 30) for $HUB_DIR/.lock,
+#            exit 1 with a message when still held; a lock older than 10 min
+#            is stale (its holder died) and is taken over
+#   release  remove the lock; callers release only a lock they acquired
+# The lock is an empty directory: git never tracks it, so `git add -A` can't
+# pick it up.
+set -euo pipefail
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+L="$HUB_DIR/.lock"
+case "${1:-}" in
+  acquire)
+    [ -d "$HUB_DIR" ] || { echo "hub absent : $HUB_DIR" >&2; exit 1; }   # no point waiting
+    WAIT=${SESSION_LOCK_WAIT:-30}; i=0
+    until mkdir "$L" 2>/dev/null; do
+      if [ -n "$(find "$L" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+        rmdir "$L" 2>/dev/null || true          # stale: take it over
+        continue
+      fi
+      i=$((i + 1))
+      [ "$i" -lt $((WAIT * 2)) ] || { echo "hub verrouillé par une autre opération ($L) — réessaie plus tard" >&2; exit 1; }
+      sleep 0.5
+    done ;;
+  release) rmdir "$L" 2>/dev/null || true ;;
+  *) echo "usage: session-hub-lock acquire|release" >&2; exit 1 ;;
+esac
