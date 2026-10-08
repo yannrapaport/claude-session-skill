@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# session-tui-act — actions bound to the session list (fzf) keys.
+#   open <id>              show the session in the main pane (migrating it
+#                          here first when another machine owns it)
+#   trash <id>             ask, then move it to the trash, in the main pane
+#   sort                   cycle activity → project → priority
+#   scope                  current subject ↔ all sessions
+#   filter prio|mac|nexus  toggle that filter
+# The main pane is respawned, never the list: the list stays put.
+set -euo pipefail
+S="${SESSIONS_STATE:?SESSIONS_STATE unset — run from session-tui}"
+BIN=$(cd "$(dirname "$0")" && pwd)
+main() {
+  local pane; pane=$(tmux show -wv @sessions_main)
+  tmux respawn-pane -k -t "$pane" "env PATH='$BIN:$PATH' bash -c '$1; exec $BIN/session-home'"
+}
+case "${1:-}" in
+  open)
+    SID="$2"; THIS=$(session-config machine)
+    OWNER=$(session-metastore get "$SID" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')
+    [ -n "$OWNER" ] || OWNER=$(session-registry-get "$SID" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("machine",""))')
+    DIV=$(session-registry-get "$SID" | python3 -c 'import json,sys;print("1" if json.load(sys.stdin).get("diverged") else "")')
+    if [ -n "$DIV" ]; then main "session-diverge $SID"
+    elif [ "$OWNER" = "$THIS" ] || [ -z "$OWNER" ]; then main "session-open $SID"
+    else main "session-migrate $SID && session-open $SID"
+    fi ;;
+  trash) main "session-trash --ask $2" ;;
+  sort)
+    case "$(cat "$S/sort" 2>/dev/null)" in
+      activity) echo project ;; project) echo priority ;; *) echo activity ;;
+    esac > "$S/sort.tmp" && mv "$S/sort.tmp" "$S/sort" ;;
+  scope)
+    [ "$(cat "$S/scope" 2>/dev/null)" = all ] && echo subject > "$S/scope" || echo all > "$S/scope" ;;
+  filter)
+    [ "$(cat "$S/filter" 2>/dev/null)" = "$2" ] && : > "$S/filter" || echo "$2" > "$S/filter" ;;
+  *) echo "session-tui-act: open|trash <id> | sort | scope | filter <x>" >&2; exit 2 ;;
+esac

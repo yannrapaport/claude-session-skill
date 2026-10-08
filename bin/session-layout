@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# session-layout <tmux-session> [subject] — open (or join) the two-pane layout:
+# list on the left (session-tui), main pane on the right (session-home, then
+# whichever session the list opens). Inside tmux it switches, outside it attaches.
+# Commands get an explicit PATH: tmux runs them without the .zshrc.
+set -euo pipefail
+S="${1:?usage: session-layout <tmux-session> [subject]}"; SUBJ="${2:-}"
+BIN=$(cd "$(dirname "$0")" && pwd)
+ENVP="env PATH='$BIN:$PATH'"
+ROOT="$HOME"
+[ -n "$SUBJ" ] && ROOT=$(session-subject-roots | awk -F'\t' -v s="$SUBJ" '$1==s{print $2}')
+ROOT="${ROOT:-$HOME}"
+if ! tmux has-session -t "=$S" 2>/dev/null; then
+  tmux new-session -d -s "$S" -c "$ROOT" "$ENVP $BIN/session-home"
+  tmux set-option -t "$S" @sessions_subject "$SUBJ"
+  MAIN=$(tmux display -p -t "$S" '#{pane_id}')
+  tmux set-option -w -t "$S" @sessions_main "$MAIN"
+  tmux split-window -h -b -l 38 -t "$MAIN" -c "$ROOT" "$ENVP $BIN/session-tui '$SUBJ'"
+fi
+if [ -n "${TMUX:-}" ]; then tmux switch-client -t "=$S"; else exec tmux attach -t "=$S"; fi
