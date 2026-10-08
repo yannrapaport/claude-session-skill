@@ -9,12 +9,13 @@ allowed-tools:
 
 # session:resume
 
-Resume a session from the global index. If the transcript already lives on this
-machine, resume directly. If it lives on another machine, pull it over ssh first.
+Resume a session from the global index: resolve the row, migrate the session
+here (`session-migrate` handles the copy, the replica fallback when the other
+machine sleeps, and the hub record), then open it.
 
 ## Prerequisites
 - `~/.claude/session-migrate.yml` has `machine`, `home`, and `peer_<other-machine>`
-  ssh targets configured.
+  configured.
 - `bin/` helpers are on `$PATH`.
 
 ## Usage
@@ -51,8 +52,8 @@ matching project if they want the work summary. Do not block resume on this.
 ### 3. Open it
 A skill cannot switch the running session. Hand it to the session manager:
 ```bash
-session-migrate "$SID"    # only if OWNER != THIS; asks before stopping a running source
-session-open "$SID"       # attach (or revive in its own cwd, then attach)
+# migrate is a no-op for a local session; it asks before stopping a running source
+session-migrate "$SID" && session-open "$SID"   # open = attach (or revive in its own cwd, then attach)
 ```
 `session-open` replaces this terminal, so from Claude Code run it through the
 session layout instead: tell the user to pick the session in `sessions`
