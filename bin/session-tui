@@ -13,9 +13,11 @@ if [ -n "${1:-}" ]; then echo subject; else echo all; fi > "$SESSIONS_STATE/scop
 session-hub-sync >/dev/null 2>&1 || true
 R='reload(session-rows)'
 A='execute-silent(session-tui-act'
+# Ctrl-C/abort restarts the list; only ^q (quit marker) ends the loop.
+while :; do
 session-rows | fzf --ansi --no-sort --layout=reverse --info=hidden \
   --delimiter=$'\t' --with-nth=2 \
-  --header=$'⏎ ouvrir  ^s tri  ^a tout\n⌥1-3/0 prio  ^x corbeille  ^r maj' \
+  --header=$'⏎ ouvrir  ^s tri  ^a tout  ^q quitter\n⌥1-3/0 prio  ^x corbeille  ^r maj' \
   --bind "enter:$A open {1})+$R" \
   --bind "ctrl-x:$A trash {1})+$R" \
   --bind "ctrl-s:$A sort)+$R" \
@@ -28,4 +30,8 @@ session-rows | fzf --ansi --no-sort --layout=reverse --info=hidden \
   --bind "alt-3:execute-silent(session-priority {1} may)+$R" \
   --bind "alt-0:execute-silent(session-priority {1} none)+$R" \
   --bind "ctrl-r:execute-silent(session-hub-sync)+$R" \
+  --bind "ctrl-q:execute-silent(touch $SESSIONS_STATE/quit)+abort" \
   --bind "esc:clear-query" || true
+[ ! -e "$SESSIONS_STATE/quit" ] || break
+sleep 0.2
+done

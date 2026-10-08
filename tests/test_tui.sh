@@ -35,11 +35,33 @@ assert_eq "open remote → migrate then open" "ok" "$r"
 : > "$MTMP/tmux.log"
 STUB_TMUX_HAS=1 on mac session-layout cc-tpg tpg
 L=$(cat "$MTMP/tmux.log")
-case "$L" in *"new-session -d -s cc-tpg"*"set-option -w -t cc-tpg @sessions_main %1"*"split-window -h -b -l 38 -t %1"*"session-tui"*) r=ok ;; *) r="$L" ;; esac
+case "$L" in *"new-session -d -s cc-tpg"*"set-option -w -t cc-tpg @sessions_main %1"*"split-window -h -b -l 38 -P -F #{pane_id} -t %1"*"session-tui"*) r=ok ;; *) r="$L" ;; esac
 assert_eq "layout creates two panes" "ok" "$r"
 : > "$MTMP/tmux.log"
 STUB_TMUX_HAS=0 on mac session-layout cc-tpg tpg
 case "$(cat "$MTMP/tmux.log")" in *new-session*) r=recreated ;; *) r=ok ;; esac
 assert_eq "layout reuses existing session" "ok" "$r"
+case "$L" in *"set-option -p -t %1 remain-on-exit on"*) r=ok ;; *) r=missing ;; esac
+assert_eq "layout: main pane remain-on-exit" "ok" "$r"
+case "$L" in *"@sessions_list %2"*) r=ok ;; *) r=missing ;; esac
+assert_eq "layout: list pane id stored" "ok" "$r"
+: > "$MTMP/tmux.log"
+STUB_TMUX_HAS=0 STUB_LIST_GONE=1 on mac session-layout cc-tpg tpg
+case "$(cat "$MTMP/tmux.log")" in *"split-window -h -b -l 38"*) r=ok ;; *) r=no-split ;; esac
+assert_eq "layout repairs a missing list pane" "ok" "$r"
+: > "$MTMP/tmux.log"
+STUB_TMUX_HAS=0 STUB_LIST_OPT= on mac session-layout cc-tpg tpg
+case "$(cat "$MTMP/tmux.log")" in *"split-window"*) r=ok ;; *) r=no-split ;; esac
+assert_eq "layout repairs an unrecorded list pane" "ok" "$r"
+: > "$MTMP/tmux.log"
+STUB_TMUX_HAS=0 on mac session-layout cc-tpg tpg
+case "$(cat "$MTMP/tmux.log")" in *split-window*) r=split ;; *) r=ok ;; esac
+assert_eq "layout leaves a healthy list pane alone" "ok" "$r"
+
+# Failures stay visible; the respawn carries the subject.
+: > "$MTMP/tmux.log"
+on mac session-tui-act open "$SID"
+case "$(tail -1 "$MTMP/tmux.log")" in *"échec"*"pour revenir"*"session-home"*tpg*) r=ok ;; *) r="$(tail -1 "$MTMP/tmux.log")" ;; esac
+assert_eq "respawn chain shows failures and passes subject" "ok" "$r"
 unset SESSIONS_STATE
 machines_teardown

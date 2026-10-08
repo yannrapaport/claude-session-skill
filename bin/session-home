@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# session-home — what the main pane shows when no session is open: the agent
-# view of the layout's subject (what `cc <subject>` shows). Loops so the pane
-# never dies under the list.
+# session-home [subject] — what the main pane shows when no session is open: the
+# agent view of the layout's subject (what `cc <subject>` shows). The subject
+# comes from the argument (no race with the tmux option), else @sessions_subject.
+# Loops forever (Ctrl-C and Ctrl-D only redraw) so the pane never dies under the list.
 set -euo pipefail
 CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
-SUBJ=$(tmux show -v @sessions_subject 2>/dev/null || true)
+if [ $# -gt 0 ]; then SUBJ="$1"; else SUBJ=$(tmux show -v @sessions_subject 2>/dev/null || true); fi
 ROOT="$HOME"
-[ -n "$SUBJ" ] && ROOT=$(session-subject-roots | awk -F'\t' -v s="$SUBJ" '$1==s{print $2}')
+[ -z "$SUBJ" ] || ROOT=$(session-subject-roots 2>/dev/null | awk -F'\t' -v s="$SUBJ" '$1==s{print $2}' || true)
 while :; do
   "$CLAUDE" agents --cwd "${ROOT:-$HOME}" || true
-  read -r -p "⏎ vue agents " _ || exit 0
+  ( trap '' INT; read -r -p "⏎ vue agents " _ ) || sleep 1
 done

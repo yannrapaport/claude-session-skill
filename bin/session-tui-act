@@ -6,13 +6,22 @@
 #   sort                   cycle activity → project → priority
 #   scope                  current subject ↔ all sessions
 #   filter prio|mac|nexus  toggle that filter
-# The main pane is respawned, never the list: the list stays put.
+# The main pane is respawned, never the list: the list stays put. A failing
+# action stays visible in the pane until a key is pressed; an unexpected
+# failure of this script itself is shown as a tmux message.
 set -euo pipefail
+trap 'rc=$?; [ "$rc" -eq 0 ] || tmux display-message "session-tui-act: échec ($rc)" 2>/dev/null || true' EXIT
 S="${SESSIONS_STATE:?SESSIONS_STATE unset — run from session-tui}"
 BIN=$(cd "$(dirname "$0")" && pwd)
+sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }   # single-quote one word for a shell
+# main <command line>: run it in the main pane, then fall back to session-home.
 main() {
-  local pane; pane=$(tmux show -wv @sessions_main)
-  tmux respawn-pane -k -t "$pane" "env PATH='$BIN:$PATH' bash -c '$1; exec $BIN/session-home'"
+  local pane subj inner
+  pane=$(tmux show -wv @sessions_main 2>/dev/null || true)
+  [ -n "$pane" ] || { tmux display-message "volet principal introuvable"; exit 1; }
+  subj=$(tmux show -v @sessions_subject 2>/dev/null || true)
+  inner="$1 || { s=\$?; echo \"échec (\$s) — ⏎ pour revenir\"; read -r _; }; exec $(printf %q "$BIN/session-home") $(printf %q "$subj")"
+  tmux respawn-pane -k -t "$pane" "env PATH=$(printf %q "$BIN:$PATH") bash -c $(sq "$inner")"
 }
 case "${1:-}" in
   open)
@@ -20,11 +29,12 @@ case "${1:-}" in
     OWNER=$(session-metastore get "$SID" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')
     [ -n "$OWNER" ] || OWNER=$(session-registry-get "$SID" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("machine",""))')
     DIV=$(session-registry-get "$SID" | python3 -c 'import json,sys;print("1" if json.load(sys.stdin).get("diverged") else "")')
-    if [ -n "$DIV" ]; then main "session-diverge $SID"
-    elif [ "$OWNER" = "$THIS" ] || [ -z "$OWNER" ]; then main "session-open $SID"
-    else main "session-migrate $SID && session-open $SID"
+    Q=$(printf %q "$SID")
+    if [ -n "$DIV" ]; then main "session-diverge $Q"
+    elif [ "$OWNER" = "$THIS" ] || [ -z "$OWNER" ]; then main "session-open $Q"
+    else main "session-migrate $Q && session-open $Q"
     fi ;;
-  trash) main "session-trash --ask $2" ;;
+  trash) main "session-trash --ask $(printf %q "$2")" ;;
   sort)
     case "$(cat "$S/sort" 2>/dev/null)" in
       activity) echo project ;; project) echo priority ;; *) echo activity ;;

@@ -94,7 +94,11 @@ case "$*" in
   "show -wv @sessions_main") echo "%1" ;;
   "show -v @sessions_subject") echo "${STUB_SUBJECT:-tpg}" ;;
   has-session*) exit "${STUB_TMUX_HAS:-1}" ;;
+  "show -wv -t "*"@sessions_main") echo "%1" ;;
+  "show -wv -t "*"@sessions_list") [ -n "${STUB_LIST_OPT-x}" ] && echo "${STUB_LIST_OPT-%2}" ;;
+  "display -p -t %2"*) [ -z "${STUB_LIST_GONE:-}" ] || exit 1; echo "%2" ;;
   "display -p"*) echo "%1" ;;
+  "split-window"*) echo "%2" ;;
 esac
 exit 0
 EOF
