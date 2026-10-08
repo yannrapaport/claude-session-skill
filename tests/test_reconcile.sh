@@ -72,13 +72,29 @@ assert_eq "single id → trashed"     "no"  "$([ -f "$FE" ] && echo yes || echo 
 assert_eq "single id → others kept" "yes" "$([ -f "$FC" ] && echo yes || echo no)"
 assert_eq "single id → flags kept"  "$B"  "$(diverged_list)"
 
-# Divergence → keep both: forked copy appears, original goes to the trash.
+# Divergence → keep both. The fork writes no transcript before its first prompt:
+# the link is recorded, the original waits, and the user lands in the fork.
+FORK=f0f0f0f0-0000-0000-0000-000000000000
+forks_json() { python3 -c "import json;print(json.load(open('$M/.claude/session-forks.json')))" 2>/dev/null || echo none; }
 : > "$MTMP/claude.log"
 echo g | on mac session-diverge "$B" >/dev/null 2>&1
-assert_eq "keep both: fork requested" "yes" "$(grep -q -- "--resume $B --fork-session --bg" "$MTMP/claude.log" && echo yes || echo no)"
-assert_eq "keep both: original trashed" "no" "$([ -f "$FB" ] && echo yes || echo no)"
-assert_eq "keep both: fork present" "yes" "$([ -f "$(dirname "$FB")/f0f0f0f0-0000-0000-0000-000000000000.jsonl" ] && echo yes || echo no)"
-assert_eq "keep both: flag cleared" "" "$(diverged_list)"
+assert_eq "keep both: fork requested"  "yes" "$(grep -q -- "--resume $B --fork-session --bg" "$MTMP/claude.log" && echo yes || echo no)"
+assert_eq "keep both: link recorded"   "{'$B': '$FORK'}" "$(forks_json)"
+assert_eq "keep both: original kept"   "yes" "$([ -f "$FB" ] && echo yes || echo no)"
+assert_eq "keep both: attached to fork" "mac attach f0f0f0f0" "$(tail -1 "$MTMP/claude.log")"
+# Fork not saved yet → reconcile leaves the original alone, still diverged.
+echo '[]' > "$M/.agents.json"
+on mac session-reconcile >/dev/null 2>&1
+assert_eq "fork pending: original kept"     "yes" "$([ -f "$FB" ] && echo yes || echo no)"
+assert_eq "fork pending: still diverged"    "$B"  "$(diverged_list)"
+assert_eq "fork pending: link kept"         "{'$B': '$FORK'}" "$(forks_json)"
+# The fork's first prompt writes its transcript → original trashed, link dropped.
+echo '{"type":"user","uuid":"f1"}' > "$(dirname "$FB")/$FORK.jsonl"
+on mac session-reconcile >/dev/null 2>&1
+assert_eq "fork saved: original trashed"    "yes" "$(in_trash "$B")"
+assert_eq "fork saved: link dropped"        "{}"  "$(forks_json)"
+assert_eq "fork saved: flag cleared"        ""    "$(diverged_list)"
+assert_eq "fork saved: fork kept"           "yes" "$([ -f "$(dirname "$FB")/$FORK.jsonl" ] && echo yes || echo no)"
 
 # Divergence → trash, refused while running.
 G=99990000-1111-2222-3333-444444444444
@@ -93,14 +109,16 @@ echo '[]' > "$M/.agents.json"
 echo c | on mac session-diverge "$G" >/dev/null 2>&1
 assert_eq "diverge c: trashed"         "yes" "$(in_trash "$G")"
 
-# Keep both, but the fork's transcript never appears → nothing moved.
+# Keep both, but no new session shows up in the supervisor → nothing written.
 H=88880000-1111-2222-3333-444444444444
 FH=$(mk_session mac "$H" "$M/projects/tpg/rakam"); own_elsewhere "$H" "$FH"; echo '{"uuid":"late"}' >> "$FH"
-rm -f "$(dirname "$FH")"/f0f0f0f0-*.jsonl; touch "$MTMP/nofork"
-rc=0; echo g | on mac session-diverge "$H" >/dev/null 2>&1 || rc=$?
+touch "$MTMP/nofork"; : > "$MTMP/claude.log"
+rc=0; echo g | SESSION_FORK_WAIT=1 on mac session-diverge "$H" >/dev/null 2>&1 || rc=$?
 rm -f "$MTMP/nofork"
 assert_eq "keep both, no fork: fails"         "1"   "$rc"
 assert_eq "keep both, no fork: original kept" "yes" "$([ -f "$FH" ] && echo yes || echo no)"
+assert_eq "keep both, no fork: no link"       "{}"  "$(forks_json)"
+assert_eq "keep both, no fork: no attach"     "no"  "$(grep -q attach "$MTMP/claude.log" && echo yes || echo no)"
 
 # Supervisor, several ids in one read.
 echo "[{\"sessionId\":\"$C\",\"pid\":7},{\"sessionId\":\"$D\",\"state\":\"stopped\"}]" > "$M/.agents.json"

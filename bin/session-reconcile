@@ -6,6 +6,10 @@
 #   identical to fingerprint   trash (session-trash: moved, never deleted)
 #   anything else              diverged: untouched, listed in session-diverged.json
 #   (the same id under two project dirs is always diverged, never trashed)
+# First, kept-both forks (session-diverge g, session-forks.json orig → fork):
+#   fork transcript saved      original trashed, link dropped
+#   original gone              link dropped
+#   fork not saved yet         original untouched, stays diverged
 # Full run (no id) also empties trash days older than 30 days.
 # With an id (called over ssh right after a migration) it syncs the hub first.
 set -euo pipefail
@@ -20,6 +24,57 @@ DIV="$CLAUDE_DIR/session-diverged.json"
 [ -z "$ONE" ] || session-hub-sync >/dev/null 2>&1 || true
 META=$(mktemp); trap 'rm -f "$META"' EXIT
 session-metastore all > "$META"
+FORKS="$CLAUDE_DIR/session-forks.json"
+PENDING=()
+if [ -f "$FORKS" ]; then
+  # One line per link: <trash|drop|pending> <original sid>
+  LINKS=$(python3 - "$FORKS" "$CLAUDE_DIR" "$ONE" << 'PYEOF'
+import glob, json, os, re, sys
+path, cdir, one = sys.argv[1:]
+try:
+    d = json.load(open(path))
+except (OSError, ValueError):
+    d = {}
+ok = lambda i: isinstance(i, str) and re.fullmatch(r"[0-9a-fA-F-]+", i)
+for orig, fork in (d.items() if isinstance(d, dict) else []):
+    if not ok(orig) or (one and orig != one):
+        continue
+    here = lambda i: glob.glob(os.path.join(cdir, "projects", "*", i + ".jsonl"))
+    if not here(orig):
+        print("drop", orig)
+    elif ok(fork) and here(fork):
+        print("trash", orig)
+    else:
+        print("pending", orig)
+PYEOF
+)
+  DROP=()
+  while read -r act orig; do
+    case "$act" in
+      drop) DROP+=("$orig") ;;
+      trash) session-trash "$orig" >/dev/null </dev/null && DROP+=("$orig") || PENDING+=("$orig") ;;
+      pending) PENDING+=("$orig") ;;
+    esac
+  done <<< "$LINKS"
+  if [ ${#DROP[@]} -gt 0 ]; then
+    python3 - "$FORKS" "${DROP[@]}" << 'PYEOF'
+import json, os, sys, tempfile
+path, *drop = sys.argv[1:]
+try:
+    d = json.load(open(path))
+    d = d if isinstance(d, dict) else {}
+except (OSError, ValueError):
+    d = {}
+for i in drop:
+    d.pop(i, None)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+    json.dump(d, fh, indent=2, sort_keys=True)
+os.replace(tmp, path)
+PYEOF
+  fi
+fi
+is_pending() { local p; for p in "${PENDING[@]:-}"; do [ "$p" = "$1" ] && return 0; done; return 1; }
 shopt -s nullglob
 FILES=()
 for f in "$CLAUDE_DIR"/projects/*/*.jsonl; do
@@ -70,6 +125,8 @@ while read -r sid n size sha f; do
     KEEP+=("$sid"); echo "session-reconcile: état de ${sid:0:8} illisible — laissée en l'état" >&2; continue
   fi
   [ "$(state_of "$sid")" != running ] || { KEEP+=("$sid"); continue; }
+  # Kept both, fork not saved yet: the original waits, flagged.
+  ! is_pending "$sid" || { NEW_DIV+=("$sid"); continue; }
   # The same id under two project dirs: never guess which one to trash.
   [ "$n" -eq 1 ] || { NEW_DIV+=("$sid"); continue; }
   cur=$(session-fingerprint "$f" </dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["size"],d["sha256"])') || continue

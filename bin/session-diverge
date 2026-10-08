@@ -1,22 +1,39 @@
 #!/usr/bin/env bash
 # session-diverge <session-id> — settle a diverged local copy: the session was
 # migrated away, but this copy kept going (lid closed mid-turn, or resumed by hand).
-#   g  keep both: this copy carries on under a new id (--fork-session), the
-#      original local file goes to the trash once the fork's transcript exists
+#   g  keep both: this copy carries on under a new id (--fork-session --bg).
+#      A fork writes no transcript before its first prompt, so the original is
+#      not trashed now: the link original → fork goes to session-forks.json and
+#      session-reconcile trashes the original once the fork's transcript exists.
+#      Then attaches to the fork.
 #   c  put this local copy in the trash
 # Refuses a session running here, or whose supervisor state is unreadable.
+# SESSION_FORK_WAIT: seconds to wait for the fork to show up (default 10).
 set -euo pipefail
 SID="${1:?usage: session-diverge <session-id>}"
 [[ "$SID" =~ ^[0-9a-fA-F-]+$ ]] || { echo "session-diverge: identifiant invalide « $SID »" >&2; exit 1; }
 SHORT="${SID:0:8}"
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
-OWNER=$(session-metastore get "$SID" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner","?"))')
+FORKS="$CLAUDE_DIR/session-forks.json"
+OWNER=$(session-metastore get "$SID" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("owner","?") if isinstance(d,dict) else "?")')
 shopt -s nullglob
 F=("$CLAUDE_DIR"/projects/*/"$SID".jsonl)
 [ ${#F[@]} -gt 0 ] || { echo "$SHORT n'est plus ici." >&2; exit 0; }
 ST=$(session-agents-state "$SID") || { echo "session-diverge: état de $SHORT illisible — rien de fait" >&2; exit 1; }
 [ "$ST" != running ] || { echo "session-diverge: $SHORT tourne — arrête-la d'abord (claude stop $SHORT)" >&2; exit 1; }
+
+# Supervisor session ids, one per line (sessionId<TAB>cwd); fails if unreadable.
+agent_ids() {
+  "$CLAUDE" agents --json --all 2>/dev/null </dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+d = d if isinstance(d, list) else d.get("sessions", [])
+for s in d:
+    if isinstance(s, dict) and s.get("sessionId"):
+        print("%s\t%s" % (s["sessionId"], s.get("cwd") or ""))'
+}
+
 echo "⚠ $SHORT : cette copie a continué après sa migration vers $OWNER."
 echo "  [g] garder les deux — cette copie repart sous un nouvel id"
 echo "  [c] mettre cette copie à la corbeille"
@@ -25,16 +42,43 @@ case "$c" in
   g)
     CWD=$(session-jsonl-cwd "${F[0]}")
     [ -n "$CWD" ] && [ -d "$CWD" ] || { echo "répertoire de $SHORT introuvable (${CWD:-?}) — rien de fait" >&2; exit 1; }
-    OUT=$(cd "$CWD" && "$CLAUDE" --resume "$SID" --fork-session --bg) || { echo "fork impossible : $OUT" >&2; exit 1; }
-    NEW=$(printf '%s\n' "$OUT" | sed -n 's/.*backgrounded · \([0-9a-f]\{8\}\).*/\1/p' | head -1)
-    [ -n "$NEW" ] || { echo "fork impossible : $OUT" >&2; exit 1; }
-    N=()
-    for _ in $(seq 1 20); do       # the fork writes its transcript asynchronously
-      N=("$CLAUDE_DIR"/projects/*/"$NEW"*.jsonl); [ ${#N[@]} -gt 0 ] && break; sleep 0.5
+    BEFORE=$(agent_ids) || { echo "superviseur Claude illisible — rien de fait" >&2; exit 1; }
+    # Its output is colored even when piped: the fork is found in the supervisor instead.
+    (cd "$CWD" && "$CLAUDE" --resume "$SID" --fork-session --bg </dev/null >/dev/null 2>&1) \
+      || { echo "fork de $SHORT impossible — rien de fait" >&2; exit 1; }
+    NEW=""; WAIT="${SESSION_FORK_WAIT:-10}"
+    for _ in $(seq 1 $((WAIT * 2))); do
+      NOW=$(agent_ids) || NOW=""
+      # A new sessionId, preferably in this cwd.
+      NEW=$(python3 -c '
+import re, sys
+before = {l.split("\t")[0] for l in sys.argv[1].splitlines() if l}
+new = [l.split("\t") + [""] for l in sys.argv[2].splitlines() if l and l.split("\t")[0] not in before]
+new = [n for n in new if re.fullmatch(r"[0-9a-fA-F-]+", n[0])]
+same = [n for n in new if n[1] == sys.argv[3]]
+print((same or new or [[""]])[0][0])' "$BEFORE" "$NOW" "$CWD")
+      [ -z "$NEW" ] || break
+      sleep 0.5
     done
-    [ ${#N[@]} -gt 0 ] || { echo "la copie $NEW n'apparaît pas — rien n'est déplacé" >&2; exit 1; }
-    session-trash "$SID" || { echo "copie $NEW créée, mais $SHORT n'a pas pu aller à la corbeille — laissée en place" >&2; exit 1; }
-    echo "✓ copie locale devenue $NEW" ;;
+    [ -n "$NEW" ] || { echo "la copie de $SHORT n'apparaît pas dans le superviseur — rien n'est déplacé" >&2; exit 1; }
+    python3 - "$FORKS" "$SID" "$NEW" << 'PYEOF'
+import json, os, sys, tempfile
+path, orig, fork = sys.argv[1:]
+try:
+    d = json.load(open(path))
+    d = d if isinstance(d, dict) else {}
+except (OSError, ValueError):
+    d = {}
+d[orig] = fork
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+    json.dump(d, fh, indent=2, sort_keys=True)
+os.replace(tmp, path)
+PYEOF
+    echo "✓ la copie tourne sous ${NEW:0:8}."
+    echo "  Envoie-lui un message pour qu'elle soit enregistrée : l'original $SHORT"
+    echo "  ira à la corbeille au prochain scan, une fois la copie enregistrée."
+    exec "$CLAUDE" attach "${NEW:0:8}" ;;
   c) session-trash "$SID" || { echo "$SHORT n'a pas pu aller à la corbeille — laissée en place" >&2; exit 1; } ;;
   *) echo "rien de fait." ;;
 esac

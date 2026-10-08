@@ -84,20 +84,27 @@ EOF
   cat > "$MTMP/stub/claude" <<'EOF'
 #!/usr/bin/env bash
 # claude stub: logs "<machine> <argv>" to $MTMP/claude.log.
-# agents → $HOME/.agents.json. --resume --fork-session --bg → creates a fork file
-# (unless $MTMP/nofork exists: the backgrounded line is printed, no file appears).
+# agents → $HOME/.agents.json. attach → only logged.
+# --resume --fork-session --bg → like the real one: prints an ANSI-colored line,
+# writes NO transcript (that waits for the first prompt), and registers the fork
+# (f0f0f0f0-…, pid, status idle, cwd) in $HOME/.agents.json — unless
+# $MTMP/nofork exists (line printed, nothing registered).
 m=$(basename "$HOME")
 echo "$m $*" >> "$MTMP/claude.log"
 case "$1" in
   agents) cat "$HOME/.agents.json" ;;
   --resume)
     if [[ " $* " == *" --fork-session "* ]]; then
-      enc=$(printf '%s' "$PWD" | sed 's/[^a-zA-Z0-9]/-/g')
-      [ -e "$MTMP/nofork" ] && { echo "backgrounded · f0f0f0f0 (idle — send a prompt to start)"; exit 0; }
-      mkdir -p "$HOME/.claude/projects/$enc"
-      echo '{"type":"user","entrypoint":"cli","message":{"role":"user","content":"fork"}}' \
-        > "$HOME/.claude/projects/$enc/f0f0f0f0-0000-0000-0000-000000000000.jsonl"
-      echo "backgrounded · f0f0f0f0 (idle — send a prompt to start)"
+      printf 'backgrounded · \033[36mf0f0f0f0\033[39m\033[2m (idle — send a prompt to start)\033[22m\n'
+      [ -e "$MTMP/nofork" ] || python3 - "$HOME/.agents.json" "$PWD" <<'PY'
+import json, sys
+p, cwd = sys.argv[1:]
+try: d = json.load(open(p))
+except (OSError, ValueError): d = []
+d.append({"pid": 999, "id": "f0f0f0f0", "sessionId": "f0f0f0f0-0000-0000-0000-000000000000",
+          "status": "idle", "state": "blocked", "cwd": cwd})
+json.dump(d, open(p, "w"))
+PY
     else
       echo "backgrounded · ${2:0:8} (idle — send a prompt to start)"
     fi ;;
