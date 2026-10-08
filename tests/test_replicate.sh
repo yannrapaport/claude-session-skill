@@ -38,4 +38,36 @@ on mac session-replicate "$SID"
 rm -f "$F"; rm -rf "${F%.jsonl}"
 on mac session-replicate
 assert_eq "prune replica of vanished session" "no" "$([ -d "$REP" ] && echo yes || echo no)"
+
+# Stop hook: returns fast, always 0, replica shows up detached.
+mk_session mac "$SID" "$MTMP/mac/projects/tpg/rakam" >/dev/null
+rm -rf "$REP"
+HOOK="$SCRIPT_DIR/../hooks/stop-replicate"
+SECONDS=0; rc=0
+printf '{"session_id":"%s"}' "$SID" | on mac env SESSION_BIN="$SCRIPT_DIR/../bin" bash "$HOOK" || rc=$?
+assert_eq "hook exits 0" "0" "$rc"
+assert_eq "hook returns quickly" "yes" "$([ "$SECONDS" -lt 3 ] && echo yes || echo no)"
+for _ in $(seq 50); do [ -f "$REP/source.json" ] && break; sleep 0.1; done
+assert_eq "hook replicates detached" "yes" "$([ -f "$REP/source.json" ] && echo yes || echo no)"
+rc=0; printf 'garbage' | on mac env SESSION_BIN="$SCRIPT_DIR/../bin" bash "$HOOK" || rc=$?
+assert_eq "hook: bad stdin still exits 0" "0" "$rc"
+
+# A failed copy records no state; a later run replicates.
+SID2=eeeeeeee-1111-2222-3333-444444444444
+mk_session mac "$SID2" "$MTMP/mac/projects/tpg/rakam" >/dev/null
+touch "$MTMP/fail.rsync"; on mac session-replicate >/dev/null 2>&1 || true; rm -f "$MTMP/fail.rsync"
+assert_eq "failed copy: no state entry" "" \
+  "$(python3 -c "import json;print(json.load(open('$MTMP/mac/.claude/session-replica-state.json')).get('$SID2',''))")"
+on mac session-replicate >/dev/null 2>&1
+assert_eq "retry replicates" "yes" "$([ -f "$MTMP/nexus/.claude/session-replica/mac/$SID2/source.json" ] && echo yes || echo no)"
+
+# Prune guards: no local projects/ -> nothing pruned; odd names untouched.
+mkdir -p "$MTMP/nexus/.claude/session-replica/mac/..x" "$MTMP/nexus/.claude/session-replica/mac/a b"
+mv "$MTMP/mac/.claude/projects" "$MTMP/mac/.claude/projects.away"
+on mac session-replicate >/dev/null 2>&1 || true
+assert_eq "no projects/: no prune" "yes" "$([ -d "$MTMP/nexus/.claude/session-replica/mac/$SID2" ] && echo yes || echo no)"
+mv "$MTMP/mac/.claude/projects.away" "$MTMP/mac/.claude/projects"
+on mac session-replicate >/dev/null 2>&1 || true
+assert_eq "odd name '..x' untouched" "yes" "$([ -d "$MTMP/nexus/.claude/session-replica/mac/..x" ] && echo yes || echo no)"
+assert_eq "odd name 'a b' untouched" "yes" "$([ -d "$MTMP/nexus/.claude/session-replica/mac/a b" ] && echo yes || echo no)"
 machines_teardown

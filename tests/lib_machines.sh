@@ -50,9 +50,12 @@ EOF
   cat > "$MTMP/stub/rsync" <<'EOF'
 #!/usr/bin/env bash
 # rsync stub: "<peer>:<path>" → $MTMP/<peer>/<path> (relative paths from that home).
+[ -e "$MTMP/fail.rsync" ] && { echo "rsync: simulated failure" >&2; exit 23; }
 args=()
-for a in "$@"; do
+while [ $# -gt 0 ]; do
+  a="$1"; shift
   case "$a" in
+    -e) shift ;;
     mac:*|nexus:*)
       p="${a%%:*}"
       [ -e "$MTMP/down.$p" ] && { echo "rsync: connection to $p failed" >&2; exit 255; }
