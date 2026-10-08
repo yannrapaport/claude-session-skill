@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# session-agents-state <session-id> — what this machine's Claude supervisor
+# knows of a session:
+#   running  an active process holds it (entry carries a pid or a status)
+#   stopped  a background session it remembers, not running (state stopped/done)
+#   unknown  never backgrounded here
+set -euo pipefail
+CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
+"$CLAUDE" agents --json --all 2>/dev/null | python3 -c '
+import json, sys
+sid = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    print("unknown"); sys.exit()
+d = d if isinstance(d, list) else d.get("sessions", [])
+st = "unknown"
+for s in d:
+    if s.get("sessionId") != sid:
+        continue
+    if "pid" in s or s.get("status"):
+        st = "running"; break
+    st = "stopped"
+print(st)' "$1"

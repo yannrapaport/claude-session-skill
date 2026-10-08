@@ -1,6 +1,6 @@
 ---
 name: resume
-description: Resume any session from the index on this machine — pulls the JSONL over ssh if it lives on another machine, then claude --resume.
+description: Resume any session from the index — migrates it here if it lives on the other machine, then opens it (attach, or revive then attach).
 argument-hint: "[row-number-or-id]"
 allowed-tools:
   - Bash
@@ -43,54 +43,17 @@ ambiguous one, and says which — show `sessions` again and stop rather than
 guessing. A row number needs a prior listing in this hub; if it reports there
 is none, run `sessions` first and ask the user to re-pick.
 
-### 2. Look up the session
-```bash
-INFO=$(session-registry-get "$SID")
-[ "$INFO" = "{}" ] && { echo "Unknown session id."; exit 1; }
-OWNER=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin)['machine'])")
-PROJECT_RELATIVE=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin)['project_relative'])")
-REMOTE_CWD=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin).get('cwd',''))")
-# Build this machine's project path. If we own the session, its cwd IS local — use it directly.
-if [ "$OWNER" = "$THIS" ] && [ -n "$REMOTE_CWD" ]; then
-  PROJECT_PATH="$REMOTE_CWD"
-elif [ -z "$PROJECT_RELATIVE" ]; then
-  PROJECT_PATH="$HOME_DIR"
-else
-  PROJECT_PATH="$HOME_DIR/$PROJECT_RELATIVE"
-fi
-LOCAL_ENCODED=$(session-encode-path "$PROJECT_PATH")
-LOCAL_JSONL="$HOME_DIR/.claude/projects/$LOCAL_ENCODED/$SID.jsonl"
-```
-
-### 3. Ensure the JSONL is local
-If `$LOCAL_JSONL` already exists, skip to step 4. Otherwise pull it from the owner:
-```bash
-PEER=$(session-config "peer_$OWNER")
-# Remote path: encode the owner's absolute cwd; fall back to project_relative if cwd is blank (legacy).
-if [ -n "$REMOTE_CWD" ]; then
-  REMOTE_ENCODED=$(session-encode-path "$REMOTE_CWD")
-else
-  REMOTE_ENCODED=$(ssh "$PEER" "ls -d .claude/projects/*$PROJECT_RELATIVE* 2>/dev/null | head -1 | xargs basename")
-fi
-mkdir -p "$HOME_DIR/.claude/projects/$LOCAL_ENCODED"
-rsync -az "$PEER:.claude/projects/$REMOTE_ENCODED/$SID.jsonl" "$LOCAL_JSONL"
-```
-If rsync fails: "Could not reach $OWNER ($PEER). It must be up and on the network to resume a session that lives there." Then stop.
-
-### 4. Pull the project repo
-```bash
-git -C "$PROJECT_PATH" pull --ff-only 2>&1 | tail -1 || echo "git pull skipped/failed — project may be stale."
-```
-
-### 5. Show the latest checkpoint, if any
+### 2. Show the latest checkpoint, if any
 Checkpoints now live in the ai-brain vault (semantic) — point the user at them
 rather than auto-loading: tell them they can run `/ai-brain:restore` for the
 matching project if they want the work summary. Do not block resume on this.
 
-### 6. Launch
+### 3. Open it
+A skill cannot switch the running session. Hand it to the session manager:
 ```bash
-cd "$PROJECT_PATH"
-claude --resume "$SID"
+session-migrate "$SID"    # only if OWNER != THIS; asks before stopping a running source
+session-open "$SID"       # attach (or revive in its own cwd, then attach)
 ```
-The next scheduled index scan on this machine will record the session locally;
-no manual registry update is needed.
+`session-open` replaces this terminal, so from Claude Code run it through the
+session layout instead: tell the user to pick the session in `sessions`
+(or `cc tmux <subject>`), where the main pane opens it in place.
