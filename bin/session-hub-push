@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 # Commit all changes in hub and push.
 # Usage: session-hub-push "commit message"
-# Holds the hub lock (session-hub-lock) so it never interleaves with a migration.
+# Holds the hub lock (session-hub-lock) so it never interleaves with a
+# migration; skips acquisition when the caller already holds it
+# (SESSION_HUB_LOCKED=1).
 set -euo pipefail
 MSG="${1:-"session hub update"}"
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
-session-hub-lock acquire
-trap 'session-hub-lock release' EXIT
+if [ -z "${SESSION_HUB_LOCKED:-}" ]; then
+  TOKEN=$(session-hub-lock acquire)
+  trap 'session-hub-lock release "$TOKEN"' EXIT
+fi
 git -C "$HUB_DIR" add -A
-# Exit cleanly if nothing to commit
-git -C "$HUB_DIR" diff --cached --quiet && exit 0
-git -C "$HUB_DIR" commit -m "$MSG"
+if git -C "$HUB_DIR" diff --cached --quiet; then
+  # Nothing to commit: push anyway when local commits never left (e.g. a
+  # migration whose push could not be verified), else exit cleanly.
+  AHEAD=$(git -C "$HUB_DIR" rev-list --count '@{u}..HEAD' 2>/dev/null) || AHEAD=0
+  [ "$AHEAD" -gt 0 ] || exit 0
+else
+  git -C "$HUB_DIR" commit -m "$MSG"
+fi
 git -C "$HUB_DIR" push origin HEAD

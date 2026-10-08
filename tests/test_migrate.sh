@@ -183,6 +183,49 @@ assert_eq "push landed despite error: migrates" "0" "$rc"
 assert_eq "push landed despite error: installed" "yes" "$([ -f "$N/.claude/projects/$NENC/$K/tool-results/t1" ] && echo yes || echo no)"
 assert_eq "push landed despite error: owner on hub" "nexus" "$(git -C "$MTMP/hub.git" show "main:meta/$K.json" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')"
 
+# Lock ownership: a foreign token can't release it; its contents are never staged.
+TOK=$(on nexus session-hub-lock acquire)
+assert_eq "lock: token printed" "yes" "$([ -n "$TOK" ] && echo yes || echo no)"
+on nexus session-hub-lock release "pid=0 host=elsewhere rnd=1"
+assert_eq "lock: foreign token leaves it" "yes" "$([ -d "$OH/.lock" ] && echo yes || echo no)"
+assert_eq "lock: contents never in git status" "" "$(git -C "$OH" status --porcelain --untracked-files=all | grep -F .lock || true)"
+# Held lock: sync skips its pull (exit 0), priority refuses and writes nothing.
+on mac session-priority "$SID" must >/dev/null 2>&1
+H0=$(git -C "$OH" rev-parse HEAD)
+rc=0; on nexus env SESSION_LOCK_WAIT=1 session-hub-sync >/dev/null 2>&1 || rc=$?
+assert_eq "lock: sync exits 0" "0" "$rc"
+assert_eq "lock: sync skipped the pull" "$H0" "$(git -C "$OH" rev-parse HEAD)"
+rc=0; on nexus env SESSION_LOCK_WAIT=1 session-priority "$K" may >/dev/null 2>&1 || rc=$?
+assert_eq "lock: priority refused" "1" "$rc"
+assert_eq "lock: priority wrote nothing" "" "$(git -C "$OH" status --porcelain -- "meta/$K.json")"
+on nexus session-hub-lock release "$TOK"
+assert_eq "lock: owner releases it" "no" "$([ -e "$OH/.lock" ] && echo yes || echo no)"
+on nexus session-hub-sync >/dev/null 2>&1
+assert_eq "lock: sync pulls once free" "must" "$(on nexus session-metastore get "$SID" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("priority",""))')"
+rc=0; on nexus session-priority "$K" may >/dev/null 2>&1 || rc=$?
+assert_eq "priority: set under the lock" "may" "$(git -C "$MTMP/hub.git" show "main:meta/$K.json" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("priority",""))')"
+
+# Push error and the check fails too → nothing undone, warning, exit 0; the
+# next hub-push sends the commit.
+P=efefefef-1111-2222-3333-444444444444
+mk_session mac "$P" "$M/projects/tpg/rakam" >/dev/null
+on mac session-index-scan >/dev/null 2>&1
+mkdir -p "$MTMP/gitblind"
+cat > "$MTMP/gitblind/git" <<EOF2
+#!/usr/bin/env bash
+for a in "\$@"; do case "\$a" in push|fetch) exit 1 ;; esac; done
+exec "$REALGIT" "\$@"
+EOF2
+chmod +x "$MTMP/gitblind/git"
+out=$(on nexus env PATH="$MTMP/gitblind:$PATH" session-migrate "$P" --yes 2>&1) && rc=0 || rc=$?
+assert_eq "unverifiable push: exit 0" "0" "$rc"
+assert_eq "unverifiable push: warns" "yes" "$(grep -q "non vérifiable" <<<"$out" && echo yes || echo no)"
+assert_eq "unverifiable push: installed" "yes" "$([ -f "$N/.claude/projects/$NENC/$P.jsonl" ] && echo yes || echo no)"
+assert_eq "unverifiable push: local commit kept" "yes" "$(git -C "$OH" log -1 --format=%s | grep -q "migrate: ${P:0:8}" && echo yes || echo no)"
+assert_eq "unverifiable push: not on hub yet" "no" "$(git -C "$MTMP/hub.git" cat-file -e "main:meta/$P.json" 2>/dev/null && echo yes || echo no)"
+on nexus session-hub-push "later" >/dev/null 2>&1
+assert_eq "unverifiable push: next push confirms" "nexus" "$(git -C "$MTMP/hub.git" show "main:meta/$P.json" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')"
+
 # Mac down → migrate from the replica, replica removed afterwards.
 on mac session-replicate "$G"
 down mac

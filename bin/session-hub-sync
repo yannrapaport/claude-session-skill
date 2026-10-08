@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Clone hub if not present; pull if already cloned.
 # Hub URL read from ~/.claude/session-migrate.yml
+# The pull runs under the hub lock (session-hub-lock), so it never rewrites a
+# migration's commit or meta edit mid-flight. Lock busy past the wait: the pull
+# is skipped with a warning and exit 0 — readers live with a slightly stale hub.
+# A caller already holding the lock sets SESSION_HUB_LOCKED=1 (no acquisition).
 set -euo pipefail
 HUB_URL=$(session-config hub)
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
@@ -9,6 +13,10 @@ if [ ! -d "$HUB_DIR/.git" ]; then
   git clone "$HUB_URL" "$HUB_DIR"
   mkdir -p "$HUB_DIR/sessions"
 else
+  if [ -z "${SESSION_HUB_LOCKED:-}" ]; then
+    TOKEN=$(session-hub-lock acquire) || { echo "Warning: hub verrouillé — pull ignoré, copie locale utilisée" >&2; exit 0; }
+    trap 'session-hub-lock release "$TOKEN"' EXIT
+  fi
   git -C "$HUB_DIR" pull --rebase --autostash origin main 2>/dev/null || \
     git -C "$HUB_DIR" pull --rebase --autostash origin master 2>/dev/null || \
     echo "Warning: hub pull failed — working with local copy" >&2

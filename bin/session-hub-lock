@@ -1,28 +1,46 @@
 #!/usr/bin/env bash
-# session-hub-lock acquire|release — mutual exclusion for writers of the local
-# hub clone (session-hub-push, session-migrate). mkdir-based: no flock on macOS.
-#   acquire  wait up to $SESSION_LOCK_WAIT seconds (default 30) for $HUB_DIR/.lock,
-#            exit 1 with a message when still held; a lock older than 10 min
-#            is stale (its holder died) and is taken over
-#   release  remove the lock; callers release only a lock they acquired
-# The lock is an empty directory: git never tracks it, so `git add -A` can't
-# pick it up.
+# session-hub-lock acquire | release <token> — mutual exclusion for everything
+# that writes the local hub clone (session-hub-sync's pull, session-hub-push,
+# session-priority, session-migrate). mkdir-based: no flock on macOS.
+#   acquire          wait up to $SESSION_LOCK_WAIT seconds (default 30) for
+#                    $HUB_DIR/.lock; prints the owner token to pass to release.
+#                    Exit 1 with a message when still held (at once when the
+#                    hub dir doesn't exist). A lock older than 10 min is stale
+#                    (its holder died) and is taken over: renamed away first,
+#                    so only one taker wins.
+#   release <token>  remove the lock only if it still carries that token.
+# A holder that runs other hub tools exports SESSION_HUB_LOCKED=1 for them:
+# session-hub-sync and session-hub-push then skip acquisition (no deadlock).
+# .lock* is listed in the clone's .git/info/exclude: never staged, and nothing
+# tracked is added that the other machine's push could conflict on.
 set -euo pipefail
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 L="$HUB_DIR/.lock"
 case "${1:-}" in
   acquire)
     [ -d "$HUB_DIR" ] || { echo "hub absent : $HUB_DIR" >&2; exit 1; }   # no point waiting
+    EX=$(git -C "$HUB_DIR" rev-parse --git-path info/exclude 2>/dev/null) || EX=""
+    if [ -n "$EX" ]; then
+      case "$EX" in /*) ;; *) EX="$HUB_DIR/$EX" ;; esac
+      grep -qxF '/.lock*' "$EX" 2>/dev/null || { mkdir -p "$(dirname "$EX")"; echo '/.lock*' >> "$EX"; }
+    fi
+    TOKEN="pid=$PPID host=$(hostname) rnd=$RANDOM$RANDOM"
     WAIT=${SESSION_LOCK_WAIT:-30}; i=0
     until mkdir "$L" 2>/dev/null; do
       if [ -n "$(find "$L" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
-        rmdir "$L" 2>/dev/null || true          # stale: take it over
+        S="$L.stale.$$"
+        if mv "$L" "$S" 2>/dev/null; then rm -rf "$S"; fi   # only one taker wins the rename
         continue
       fi
       i=$((i + 1))
       [ "$i" -lt $((WAIT * 2)) ] || { echo "hub verrouillé par une autre opération ($L) — réessaie plus tard" >&2; exit 1; }
       sleep 0.5
-    done ;;
-  release) rmdir "$L" 2>/dev/null || true ;;
-  *) echo "usage: session-hub-lock acquire|release" >&2; exit 1 ;;
+    done
+    printf '%s\n' "$TOKEN" > "$L/owner"
+    printf '%s\n' "$TOKEN" ;;
+  release)
+    TOKEN="${2:?usage: session-hub-lock release <token>}"
+    [ "$(cat "$L/owner" 2>/dev/null)" = "$TOKEN" ] || exit 0   # not ours (any more)
+    rm -f "$L/owner"; rmdir "$L" 2>/dev/null || true ;;
+  *) echo "usage: session-hub-lock acquire | release <token>" >&2; exit 1 ;;
 esac
