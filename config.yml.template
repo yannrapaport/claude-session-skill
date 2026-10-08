@@ -5,6 +5,7 @@
 hub: git@github.com:youruser/claude-sessions.git   # URL of the private hub repo
 machine: mac                                        # name of THIS machine
 home: /Users/youruser                               # absolute home path on THIS machine
+subjects_file: /Users/youruser/projects/admin/cc/subjects.zsh   # CC_DIRS shared with cc
 
 # ssh/rsync targets for every OTHER machine, keyed peer_<machine-name>.
 # Used by session:resume to pull a JSONL that lives on another machine.

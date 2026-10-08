@@ -45,7 +45,11 @@ import os, datetime, sys
 print(datetime.datetime.fromtimestamp(os.path.getmtime(sys.argv[1]), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 PY
 )
-  printf '%s\t%s\t%s\t%s\n' "$sid" "$cwd" "$mtime" "$meta" >> "$TSV"
+  # Where this cwd sits among the cc subjects, resolved HERE — the other
+  # machine cannot resolve our symlinks (~/ai-brain → ~/vaults/ai-brain).
+  subj=$(session-subject-of "$cwd" || true)
+  [ -n "$subj" ] || subj=$'\t'
+  printf '%s\t%s\t%s\t%s\t%s\n' "$sid" "$cwd" "$mtime" "$meta" "$subj" >> "$TSV"
 done
 
 python3 - "$REGISTRY" "$MACHINE" "$HOME_DIR" "$TSV" << 'PYEOF'
@@ -71,6 +75,7 @@ for raw in open(tsv):
     # parts[3] is the entrypoint, already vetted by the shell loop above.
     title, subj = at(parts, 4), at(parts, 5)
     turns, size_kb, branch = at(parts, 6, "0"), at(parts, 7, "0"), at(parts, 8)
+    cc_subject, cc_rel = at(parts, 9), at(parts, 10)
     seen.add(sid)
     home_bare = home.rstrip("/")
     if cwd == home_bare:
@@ -92,6 +97,8 @@ for raw in open(tsv):
         # every time, so "no branch" is an answer, not a failed lookup. Falling
         # back would pin a stale branch in place permanently.
         "git_branch": branch,
+        "cc_subject": cc_subject,
+        "cc_rel": cc_rel,
         "status": p.get("status", "active"),
     }
 machines[machine] = new   # entries not in `seen` are dropped => pruning

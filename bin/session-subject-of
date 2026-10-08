@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# session-subject-of <abs-cwd> — which cc subject holds this directory here.
+# Prints "subject<TAB>relative-path" (empty relative path at the root), or
+# nothing. The most specific root wins, like cc's own deduction.
+set -euo pipefail
+session-subject-roots | python3 -c '
+import os, sys
+cwd = os.path.realpath(sys.argv[1])
+best = None
+for line in sys.stdin:
+    name, root = line.rstrip("\n").split("\t", 1)
+    if cwd == root or cwd.startswith(root.rstrip("/") + "/"):
+        if best is None or len(root) > len(best[1]):
+            best = (name, root)
+if best:
+    rel = os.path.relpath(cwd, best[1])
+    rel = "" if rel == "." else rel
+    print(best[0] + "\t" + rel)
+' "$1"
