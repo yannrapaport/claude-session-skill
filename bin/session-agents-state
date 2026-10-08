@@ -4,15 +4,19 @@
 #   running  an active process holds it (entry carries a pid or a status)
 #   stopped  a background session it remembers, not running (state stopped/done)
 #   unknown  never backgrounded here
+#   error    the supervisor could not be read (command failed or output not
+#            JSON): prints `error`, message on stderr, exit 1 — callers must
+#            not treat this as `unknown`
 set -euo pipefail
 CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
-"$CLAUDE" agents --json --all 2>/dev/null | python3 -c '
+OUT=$("$CLAUDE" agents --json --all 2>/dev/null) || OUT=""
+printf '%s' "$OUT" | python3 -c '
 import json, sys
 sid = sys.argv[1]
 try:
     d = json.load(sys.stdin)
 except ValueError:
-    print("unknown"); sys.exit()
+    print("error"); print("session-agents-state: superviseur Claude illisible", file=sys.stderr); sys.exit(1)
 d = d if isinstance(d, list) else d.get("sessions", [])
 st = "unknown"
 for s in d:

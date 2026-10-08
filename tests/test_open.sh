@@ -27,4 +27,13 @@ mac attach aaaaaaaa" "$(cat "$MTMP/claude.log")"
 
 rc=0; on nexus session-open "$SID" 2>/dev/null || rc=$?
 assert_eq "absent here: refuses" "1" "$rc"
+
+# Supervisor unreadable → fail closed: no state guess, no --resume (would fork a copy).
+echo 'not json' > "$MTMP/mac/.agents.json"; : > "$MTMP/claude.log"
+rc=0; out=$(on mac session-agents-state "$SID" 2>/dev/null) || rc=$?
+assert_eq "bad supervisor output: state exits 1" "1" "$rc"
+assert_eq "bad supervisor output: state prints error" "error" "$out"
+rc=0; on mac session-open "$SID" 2>/dev/null || rc=$?
+assert_eq "bad supervisor output: open exits 1" "1" "$rc"
+assert_eq "bad supervisor output: no --resume" "0" "$(grep -c -- '--resume' "$MTMP/claude.log" || true)"
 machines_teardown

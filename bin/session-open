@@ -10,7 +10,8 @@ SID="${1:?usage: session-open <session-id>}"
 SHORT="${SID:0:8}"
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
-case "$(session-agents-state "$SID")" in
+ST=$(session-agents-state "$SID" 2>/dev/null) || { echo "session-open: superviseur Claude injoignable — rien n'est relancé" >&2; exit 1; }
+case "$ST" in
   running|stopped) exec "$CLAUDE" attach "$SHORT" ;;
 esac
 shopt -s nullglob
