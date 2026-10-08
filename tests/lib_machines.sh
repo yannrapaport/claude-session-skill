@@ -4,7 +4,8 @@
 #   on <machine> <cmd...>   run cmd as that machine (HOME, config, hub, claude dir)
 #   down <m> / up <m>       make ssh/rsync to <m> fail / succeed
 #   machines_teardown
-REAL_RSYNC=$(command -v rsync)
+# Resolved once, and never to a previous run'"'"'s stub dir left on PATH.
+REAL_RSYNC=${REAL_RSYNC:-$(PATH=$(printf %s "$PATH" | tr : '\n' | grep -v '/stub$' | paste -sd: -) command -v rsync || true)}
 export REAL_RSYNC
 
 machines_setup() {
@@ -98,6 +99,7 @@ esac
 exit 0
 EOF
   chmod +x "$MTMP/stub/"*
+  MACHINES_OLD_PATH=$PATH
   export PATH="$MTMP/stub:$PATH"
   on mac session-hub-sync >/dev/null 2>&1 || true
   on nexus session-hub-sync >/dev/null 2>&1 || true
@@ -109,7 +111,11 @@ on() {
 }
 down() { touch "$MTMP/down.$1"; }
 up()   { rm -f "$MTMP/down.$1"; }
-machines_teardown() { rm -rf "$MTMP"; }
+machines_teardown() {
+  [ -z "${MACHINES_OLD_PATH:-}" ] || export PATH="$MACHINES_OLD_PATH"
+  unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+  rm -rf "$MTMP"
+}
 
 # mk_session <machine> <id> <abs-cwd> [extra jsonl lines...] — a local interactive session.
 mk_session() {
