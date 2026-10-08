@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# session-priority <session-id> must|should|may|none — set a session's
+# priority (the todo convention) and push it to the hub.
+# A failed push is tolerated: the commit leaves with the next scan's push.
+set -euo pipefail
+SID="${1:?usage: session-priority <id> must|should|may|none}"
+P="${2:-}"
+case "$P" in
+  must|should|may) V="\"$P\"" ;;
+  none)            V=null ;;
+  *) echo "session-priority: niveau attendu must|should|may|none" >&2; exit 2 ;;
+esac
+session-hub-sync >/dev/null 2>&1 || true
+session-metastore set "$SID" priority "$V"
+session-hub-push "prio: ${SID:0:8} $P" >/dev/null 2>&1 || true

@@ -7,7 +7,9 @@
 #             (cron, SDK, scripted subagent), "" when the transcript never
 #             recorded one. The index keeps only "cli" — everything else is
 #             machine traffic, not work anyone resumes.
-# title       the session's custom-title when it has one, else the subject.
+# title       the session's custom-title (/rename) when it has one, else the
+#             title Claude Code generates (ai-title, latest wins — accepting a
+#             plan rewrites it), else the subject.
 # subject     first "real" user message (same rule as session-subject).
 # turns       count of user messages — separates a worked session from a
 #             one-shot launch that went nowhere.
@@ -35,7 +37,7 @@ def text_of(msg):
     return ""
 
 path = sys.argv[1]
-entrypoint = title = subject = branch = ""
+entrypoint = title = ai_title = subject = branch = ""
 turns = 0
 
 for line in open(path, errors="ignore"):
@@ -62,6 +64,8 @@ for line in open(path, errors="ignore"):
     t = o.get("type")
     if t == "custom-title":
         title = o.get("customTitle") or title
+    elif t == "ai-title":
+        ai_title = o.get("aiTitle") or ai_title
     elif t == "user":
         turns += 1
         if not subject:
@@ -77,6 +81,6 @@ def clean(s):
     return " ".join(str(s).replace("\t", " ").split())
 
 size_kb = os.path.getsize(path) // 1024
-print("\t".join([clean(entrypoint), clean(title or subject), clean(subject),
+print("\t".join([clean(entrypoint), clean(title or ai_title or subject), clean(subject),
                  str(turns), str(size_kb), clean(branch)]))
 PYEOF

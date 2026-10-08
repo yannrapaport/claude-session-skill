@@ -26,6 +26,23 @@ cat > "$TMP/n.jsonl" << 'EOF'
 EOF
 assert_eq "meta title falls back to subject" "Fix the login bug" "$(field "$TMP/n.jsonl" 2)"
 
+# No custom-title but a generated one: the latest ai-title stands in, ahead of
+# the subject. Accepting a plan rewrites it, hence latest wins.
+cat > "$TMP/g.jsonl" << 'EOF'
+{"type":"user","entrypoint":"cli","message":{"role":"user","content":"Fix the login bug"}}
+{"type":"ai-title","aiTitle":"login bug"}
+{"type":"ai-title","aiTitle":"login bug fix plan"}
+EOF
+assert_eq "meta title from latest ai-title" "login bug fix plan" "$(field "$TMP/g.jsonl" 2)"
+
+# A /rename beats the generated title, whatever the order.
+cat > "$TMP/c.jsonl" << 'EOF'
+{"type":"user","entrypoint":"cli","message":{"role":"user","content":"Fix the login bug"}}
+{"type":"custom-title","customTitle":"auth"}
+{"type":"ai-title","aiTitle":"login bug"}
+EOF
+assert_eq "meta custom-title beats ai-title" "auth" "$(field "$TMP/c.jsonl" 2)"
+
 # Headless run: entrypoint reported, and the walk stops there — so nothing
 # after the entrypoint line is read (title/subject/turns stay empty).
 cat > "$TMP/h.jsonl" << 'EOF'

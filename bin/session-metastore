@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# session-metastore — per-session decisions kept in the hub: meta/<id>.json
+#   get <id>               JSON object, {} when absent
+#   set <id> <key> <json>  set one key (value is JSON; null removes the key)
+#   all                    {id: meta, ...}
+# Only writes the working tree; callers commit + push (session-hub-push).
+# These files are the decisions (owner, priority, migration fingerprint);
+# registry.json stays the per-machine observation written by the scans.
+set -euo pipefail
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+python3 - "$HUB_DIR/meta" "$@" << 'PYEOF'
+import json, os, sys, tempfile
+d, cmd, *a = sys.argv[1:]
+
+def load(i):
+    try:
+        with open(os.path.join(d, i + ".json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+if cmd == "get":
+    print(json.dumps(load(a[0])))
+elif cmd == "set":
+    i, k, v = a
+    m = load(i)
+    v = json.loads(v)
+    if v is None:
+        m.pop(k, None)
+    else:
+        m[k] = v
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, i + ".json")
+    if not m:
+        if os.path.exists(path):
+            os.remove(path)        # an empty decision file says nothing
+        sys.exit(0)
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(m, fh, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+elif cmd == "all":
+    out = {}
+    if os.path.isdir(d):
+        for f in sorted(os.listdir(d)):
+            if f.endswith(".json"):
+                out[f[:-5]] = load(f[:-5])
+    print(json.dumps(out))
+else:
+    sys.exit(f"session-metastore: unknown command {cmd}")
+PYEOF
