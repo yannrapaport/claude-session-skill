@@ -40,11 +40,19 @@ EOF
   cat > "$MTMP/stub/ssh" <<'EOF'
 #!/usr/bin/env bash
 # ssh stub: [-o x]... [-q|-T] <peer> [cmd...] — runs cmd as <peer> under $MTMP.
-while :; do case "${1:-}" in -o) shift 2 ;; -q|-T) shift ;; *) break ;; esac; done
+nflag=
+while :; do case "${1:-}" in -o) shift 2 ;; -n) nflag=1; shift ;; -q|-T) shift ;; *) break ;; esac; done
 peer="$1"; shift
 [ -e "$MTMP/down.$peer" ] && { echo "ssh: connect to host $peer: Operation timed out" >&2; exit 255; }
 [ $# -eq 0 ] && exit 0
-cd "$MTMP/$peer" && exec env -u CLAUDE_DIR -u HUB_DIR_OVERRIDE -u CONFIG HOME="$MTMP/$peer" bash -c "$*"
+cd "$MTMP/$peer" || exit 1
+# Like real ssh: without -n the client swallows stdin (drained after the command).
+if [ -n "$nflag" ]; then
+  exec env -u CLAUDE_DIR -u HUB_DIR_OVERRIDE -u CONFIG HOME="$MTMP/$peer" bash -c "$*" </dev/null
+fi
+rc=0; env -u CLAUDE_DIR -u HUB_DIR_OVERRIDE -u CONFIG HOME="$MTMP/$peer" bash -c "$*" || rc=$?
+cat >/dev/null
+exit $rc
 EOF
 
   cat > "$MTMP/stub/rsync" <<'EOF'

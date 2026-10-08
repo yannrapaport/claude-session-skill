@@ -14,11 +14,12 @@ HOME_DIR=$(session-config home)
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 STATE="$CLAUDE_DIR/session-replica-state.json"
 ONE="${1:-}"
-ssh -o ConnectTimeout=3 -o BatchMode=yes "$PEER" true 2>/dev/null || exit 0
+ssh -n -o ConnectTimeout=3 -o BatchMode=yes "$PEER" true 2>/dev/null || exit 0
 [ -n "$ONE" ] || session-hub-sync >/dev/null 2>&1 || true
 
-SSH_OPTS=(-o ConnectTimeout=5)
-RSH="ssh -o ConnectTimeout=5"
+# -n: none of these ssh calls reads stdin (the prune loop reads a listing on it).
+SSH_OPTS=(-n -o ConnectTimeout=5 -o BatchMode=yes)
+RSH="ssh -o ConnectTimeout=5 -o BatchMode=yes"
 valid_id() { [[ "$1" =~ ^[0-9a-fA-F-]+$ ]]; }
 if [ -n "$ONE" ] && ! valid_id "$ONE"; then echo "session-replicate: invalid id '$ONE'" >&2; exit 0; fi
 

@@ -70,4 +70,10 @@ mv "$MTMP/mac/.claude/projects.away" "$MTMP/mac/.claude/projects"
 on mac session-replicate >/dev/null 2>&1 || true
 assert_eq "odd name '..x' untouched" "yes" "$([ -d "$MTMP/nexus/.claude/session-replica/mac/..x" ] && echo yes || echo no)"
 assert_eq "odd name 'a b' untouched" "yes" "$([ -d "$MTMP/nexus/.claude/session-replica/mac/a b" ] && echo yes || echo no)"
+
+# Two stale replicas are both pruned in one run (ssh must not eat the listing).
+for x in 11111111-aaaa 22222222-bbbb; do mkdir -p "$MTMP/nexus/.claude/session-replica/mac/$x"; done
+on mac session-replicate >/dev/null 2>&1 || true
+assert_eq "two stale replicas pruned in one run" "no" \
+  "$([ -d "$MTMP/nexus/.claude/session-replica/mac/11111111-aaaa" ] || [ -d "$MTMP/nexus/.claude/session-replica/mac/22222222-bbbb" ] && echo yes || echo no)"
 machines_teardown

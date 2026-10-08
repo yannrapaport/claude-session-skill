@@ -6,5 +6,5 @@ BIN="${SESSION_BIN:-$HOME/.claude/skills/session/bin}"
 SID=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null) || exit 0
 [ -n "$SID" ] || exit 0
 T=""; command -v timeout >/dev/null && T="timeout 20"
-( PATH="$BIN:$PATH" $T session-replicate "$SID" >/dev/null 2>&1 & )
+( PATH="$BIN:$PATH" $T session-replicate "$SID" </dev/null >/dev/null 2>&1 & )
 exit 0
