@@ -6,7 +6,7 @@ machines_setup
 H="$MTMP/mac/.claude/session-hub"
 cat > "$H/registry.json" <<'JSON'
 {"version": 2, "machines": {
- "mac":   {"old": {"cwd": "/x", "project_relative": "projects/tpg/rakam", "cc_subject": "tpg", "cc_rel": "rakam",
+ "mac":   {"0dd": {"cwd": "/x", "project_relative": "projects/tpg/rakam", "cc_subject": "tpg", "cc_rel": "rakam",
                    "last_activity": "2026-10-01T10:00:00Z", "title": "Vieux", "turns": 3, "status": "active"},
            "new": {"cwd": "/y", "project_relative": "ai-brain", "cc_subject": "brain", "cc_rel": "",
                    "last_activity": "2026-10-08T10:00:00Z", "title": "Récent", "turns": 9, "status": "active"}},
@@ -14,22 +14,22 @@ cat > "$H/registry.json" <<'JSON'
                    "last_activity": "2026-10-05T10:00:00Z", "title": "Milieu", "turns": 5, "status": "active",
                    "diverged": true}}}}
 JSON
-on mac session-metastore set old priority '"must"'
+on mac session-metastore set 0dd priority '"must"'
 ids() { cut -f1 | tr '\n' ' '; }
 export SESSIONS_STATE="$MTMP/state"; mkdir -p "$SESSIONS_STATE"
 
 echo activity > "$SESSIONS_STATE/sort"; echo all > "$SESSIONS_STATE/scope"; : > "$SESSIONS_STATE/filter"
-assert_eq "sort by activity" "new mid old " "$(on mac session-rows | ids)"
+assert_eq "sort by activity" "new mid 0dd " "$(on mac session-rows | ids)"
 echo priority > "$SESSIONS_STATE/sort"
-assert_eq "sort by priority then activity" "old new mid " "$(on mac session-rows | ids)"
+assert_eq "sort by priority then activity" "0dd new mid " "$(on mac session-rows | ids)"
 echo project > "$SESSIONS_STATE/sort"
-assert_eq "sort by project then activity" "new mid old " "$(on mac session-rows | ids)"
+assert_eq "sort by project then activity" "new mid 0dd " "$(on mac session-rows | ids)"
 echo subject > "$SESSIONS_STATE/scope"; echo tpg > "$SESSIONS_STATE/subject"
-assert_eq "scope: current subject" "mid old " "$(on mac session-rows | ids)"
+assert_eq "scope: current subject" "mid 0dd " "$(on mac session-rows | ids)"
 echo all > "$SESSIONS_STATE/scope"; echo nexus > "$SESSIONS_STATE/filter"
 assert_eq "filter: nexus" "mid " "$(on mac session-rows | ids)"
 echo prio > "$SESSIONS_STATE/filter"
-assert_eq "filter: prioritised" "old " "$(on mac session-rows | ids)"
+assert_eq "filter: prioritised" "0dd " "$(on mac session-rows | ids)"
 
 # Character-based slicing (cut -c is byte-based in a C locale).
 cols() { python3 -c 'import sys; print(sys.argv[1][int(sys.argv[2])-1:int(sys.argv[3])])' "$1" "$2" "$3"; }
@@ -65,8 +65,8 @@ T=$(on mac session-rows | grep '^ws'$'\t' | tr -cd '\t' | wc -c | tr -d ' ')
 assert_eq "sanitized title: one line" "1" "$N"
 assert_eq "sanitized title: one TAB" "1" "$T"
 # Owner from meta wins over the observing machine (owner initial = col 9).
-on mac session-metastore set old owner '"nexus"'
-LINE=$(on mac session-rows | awk -F'\t' '$1=="old"{print $2}')
+on mac session-metastore set 0dd owner '"nexus"'
+LINE=$(on mac session-rows | awk -F'\t' '$1=="0dd"{print $2}')
 assert_eq "owner from meta" "n" "$(cols "$LINE" 9 9)"
 unset SESSIONS_STATE
 machines_teardown

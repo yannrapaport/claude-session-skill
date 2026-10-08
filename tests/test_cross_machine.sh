@@ -150,4 +150,32 @@ err=$(on mac session-index-scan 2>&1 >/dev/null || true)
 echo '[]' > "$M/.agents.json"
 assert_eq "I3: reconcile failure reaches the scan's stderr" "yes" "$(yn grep -q illisible <<<"$err")"
 
+# ── M1: ids are validated before any path is built ───────────────────────────
+rc=0; on mac session-open "../x" >/dev/null 2>&1 || rc=$?
+assert_eq "M1: open rejects a bad id" "1" "$rc"
+rc=0; on mac session-priority "../x" must >/dev/null 2>&1 || rc=$?
+assert_eq "M1: priority rejects a bad id" "1" "$rc"
+assert_eq "M1: priority wrote nothing" "no" "$(yn test -e "$M/.claude/session-hub/x.json")"
+: > "$MTMP/tmux.log"
+rc=0; on mac env SESSIONS_STATE="$MTMP/st" session-tui-act open "../x" >/dev/null 2>&1 || rc=$?
+assert_eq "M1: tui-act rejects a bad id" "1 0" "$rc $(grep -c respawn-pane "$MTMP/tmux.log" || true)"
+rc=0; on mac session-metastore set "../evil" owner '"x"' >/dev/null 2>&1 || rc=$?
+assert_eq "M1: metastore set rejects a bad id" "1 no" "$rc $(yn test -e "$M/.claude/session-hub/evil.json")"
+rc=0; on mac session-metastore get "a/b" >/dev/null 2>&1 || rc=$?
+assert_eq "M1: metastore get rejects a bad id" "1" "$rc"
+
+# ── M2: equal activity → the owner's copy is the row shown ───────────────────
+T=a2a2a2a2-1111-2222-3333-444444444444
+VH=$(mktemp -d); mkdir -p "$VH/meta"
+cat > "$VH/registry.json" <<EOF
+{"version": 2, "machines": {
+  "mac":   {"$T": {"last_activity": "2026-10-08T10:00:00Z", "cwd": "/m"}},
+  "nexus": {"$T": {"last_activity": "2026-10-08T10:00:00Z", "cwd": "/n"}}}}
+EOF
+row() { HUB_DIR_OVERRIDE="$VH" session-index-view | python3 -c 'import json,sys;r=json.load(sys.stdin)[0];print(r["machine"],",".join(r["also_on"]))'; }
+echo '{"owner": "nexus"}' > "$VH/meta/$T.json"
+assert_eq "M2: tie → owner nexus shown" "nexus mac" "$(row)"
+echo '{"owner": "mac"}' > "$VH/meta/$T.json"
+assert_eq "M2: tie → owner mac shown" "mac nexus" "$(row)"
+rm -rf "$VH"
 machines_teardown

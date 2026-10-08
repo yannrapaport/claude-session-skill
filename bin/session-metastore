@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # session-metastore — per-session decisions kept in the hub: meta/<id>.json
 #   get <id>               JSON object, {} when absent
+# <id>: hex digits and dashes only (exit 1 otherwise).
 #   set <id> <key> <json>  set one key (value is JSON; null removes the key)
 #   all                    {id: meta, ...}
 # Only writes the working tree; callers commit + push (session-hub-push).
@@ -9,8 +10,11 @@
 set -euo pipefail
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 python3 - "$HUB_DIR/meta" "$@" << 'PYEOF'
-import json, os, sys, tempfile
+import json, os, re, sys, tempfile
 d, cmd, *a = sys.argv[1:]
+# An id becomes a file name under meta/: session ids only, never a path.
+if cmd in ("get", "set") and not (a and re.fullmatch(r"[0-9a-fA-F-]+", a[0])):
+    sys.exit("session-metastore: identifiant invalide « %s »" % (a[0] if a else ""))
 
 def load(i):
     try:
