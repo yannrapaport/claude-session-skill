@@ -8,6 +8,8 @@
 #      Then attaches to the fork.
 #   c  put this local copy in the trash
 # Refuses a session running here, or whose supervisor state is unreadable.
+# The fork is the new supervisor session in this copy's cwd (realpath); at the
+# timeout, a new session elsewhere is accepted only if it is the only new one.
 # SESSION_FORK_WAIT: seconds to wait for the fork to show up (default 10).
 set -euo pipefail
 SID="${1:?usage: session-diverge <session-id>}"
@@ -46,21 +48,32 @@ case "$c" in
     # Its output is colored even when piped: the fork is found in the supervisor instead.
     (cd "$CWD" && "$CLAUDE" --resume "$SID" --fork-session --bg </dev/null >/dev/null 2>&1) \
       || { echo "fork de $SHORT impossible — rien de fait" >&2; exit 1; }
-    NEW=""; WAIT="${SESSION_FORK_WAIT:-10}"
+    # Wait for a new session in this cwd: a session started meanwhile
+    # elsewhere must not be taken for the fork.
+    NEW=""; PICK=""; WAIT="${SESSION_FORK_WAIT:-10}"
     for _ in $(seq 1 $((WAIT * 2))); do
       NOW=$(agent_ids) || NOW=""
-      # A new sessionId, preferably in this cwd.
-      NEW=$(python3 -c '
-import re, sys
+      # → "match <id>" | "other <id>" (exactly one new, other cwd) | "many" | "none"
+      PICK=$(python3 -c '
+import os, re, sys
 before = {l.split("\t")[0] for l in sys.argv[1].splitlines() if l}
-new = [l.split("\t") + [""] for l in sys.argv[2].splitlines() if l and l.split("\t")[0] not in before]
-new = [n for n in new if re.fullmatch(r"[0-9a-fA-F-]+", n[0])]
-same = [n for n in new if n[1] == sys.argv[3]]
-print((same or new or [[""]])[0][0])' "$BEFORE" "$NOW" "$CWD")
-      [ -z "$NEW" ] || break
+new = [(l.split("\t") + [""])[:2] for l in sys.argv[2].splitlines() if l]
+new = [n for n in new if n[0] not in before and re.fullmatch(r"[0-9a-fA-F-]+", n[0])]
+here = os.path.realpath(sys.argv[3])
+same = [n for n in new if n[1] and os.path.realpath(n[1]) == here]
+if len(same) == 1:   print("match", same[0][0])
+elif same:           print("many")
+elif len(new) == 1:  print("other", new[0][0])
+elif new:            print("many")
+else:                print("none")' "$BEFORE" "$NOW" "$CWD")
+      case "$PICK" in match\ *) break ;; esac
       sleep 0.5
     done
-    [ -n "$NEW" ] || { echo "la copie de $SHORT n'apparaît pas dans le superviseur — rien n'est déplacé" >&2; exit 1; }
+    case "$PICK" in
+      match\ *|other\ *) NEW="${PICK#* }" ;;
+      many) echo "plusieurs nouvelles sessions sont apparues, impossible de reconnaître la copie de $SHORT — rien n'est déplacé" >&2; exit 1 ;;
+      *) echo "la copie de $SHORT n'apparaît pas dans le superviseur — rien n'est déplacé" >&2; exit 1 ;;
+    esac
     python3 - "$FORKS" "$SID" "$NEW" << 'PYEOF'
 import json, os, sys, tempfile
 path, orig, fork = sys.argv[1:]

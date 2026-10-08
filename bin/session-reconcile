@@ -10,6 +10,7 @@
 #   fork transcript saved      original trashed, link dropped
 #   original gone              link dropped
 #   fork not saved yet         original untouched, stays diverged
+#   fork unknown to supervisor and never saved  link dropped, original stays diverged
 # Full run (no id) also empties trash days older than 30 days.
 # With an id (called over ssh right after a migration) it syncs the hub first.
 set -euo pipefail
@@ -25,9 +26,9 @@ DIV="$CLAUDE_DIR/session-diverged.json"
 META=$(mktemp); trap 'rm -f "$META"' EXIT
 session-metastore all > "$META"
 FORKS="$CLAUDE_DIR/session-forks.json"
-PENDING=()
+LINKS=""
 if [ -f "$FORKS" ]; then
-  # One line per link: <trash|drop|pending> <original sid>
+  # One line per kept-both link: <trash|drop|pending> <original sid> <fork sid>
   LINKS=$(python3 - "$FORKS" "$CLAUDE_DIR" "$ONE" << 'PYEOF'
 import glob, json, os, re, sys
 path, cdir, one = sys.argv[1:]
@@ -36,45 +37,23 @@ try:
 except (OSError, ValueError):
     d = {}
 ok = lambda i: isinstance(i, str) and re.fullmatch(r"[0-9a-fA-F-]+", i)
+here = lambda i: glob.glob(os.path.join(cdir, "projects", "*", i + ".jsonl"))
 for orig, fork in (d.items() if isinstance(d, dict) else []):
     if not ok(orig) or (one and orig != one):
         continue
-    here = lambda i: glob.glob(os.path.join(cdir, "projects", "*", i + ".jsonl"))
-    if not here(orig):
-        print("drop", orig)
-    elif ok(fork) and here(fork):
-        print("trash", orig)
+    if not ok(fork):
+        print("drop", orig, "-")
+    elif not here(orig):
+        print("drop", orig, fork)
+    elif here(fork):
+        print("trash", orig, fork)
     else:
-        print("pending", orig)
+        print("pending", orig, fork)
 PYEOF
 )
-  DROP=()
-  while read -r act orig; do
-    case "$act" in
-      drop) DROP+=("$orig") ;;
-      trash) session-trash "$orig" >/dev/null </dev/null && DROP+=("$orig") || PENDING+=("$orig") ;;
-      pending) PENDING+=("$orig") ;;
-    esac
-  done <<< "$LINKS"
-  if [ ${#DROP[@]} -gt 0 ]; then
-    python3 - "$FORKS" "${DROP[@]}" << 'PYEOF'
-import json, os, sys, tempfile
-path, *drop = sys.argv[1:]
-try:
-    d = json.load(open(path))
-    d = d if isinstance(d, dict) else {}
-except (OSError, ValueError):
-    d = {}
-for i in drop:
-    d.pop(i, None)
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
-with os.fdopen(fd, "w") as fh:
-    json.dump(d, fh, indent=2, sort_keys=True)
-os.replace(tmp, path)
-PYEOF
-  fi
 fi
-is_pending() { local p; for p in "${PENDING[@]:-}"; do [ "$p" = "$1" ] && return 0; done; return 1; }
+PENDING=(); TRASHED=()
+in_list() { local x="$1" p; shift; for p in "$@"; do [ "$p" = "$x" ] && return 0; done; return 1; }
 shopt -s nullglob
 FILES=()
 for f in "$CLAUDE_DIR"/projects/*/*.jsonl; do
@@ -106,9 +85,10 @@ for f in files:
     print(sid, copies[sid], fp.get("size", "-"), fp.get("sha256", "-"), f)
 PYEOF
 )
-# One supervisor read for every candidate; unreadable → settle nothing (fail closed).
+# One supervisor read for every candidate and every unsaved fork;
+# unreadable → settle nothing (fail closed).
 STATES=""; SUP_OK=1
-CANDIDATES=$(printf '%s\n' "$PLAN" | awk 'NF {print $1}' | sort -u)
+CANDIDATES=$( { printf '%s\n' "$PLAN" | awk 'NF {print $1}'; printf '%s\n' "$LINKS" | awk '$1 == "pending" {print $3}'; } | sort -u)
 if [ -n "$CANDIDATES" ]; then
   # shellcheck disable=SC2086  # ids are validated hex/dash
   if [ "$(printf '%s\n' "$CANDIDATES" | wc -l)" -eq 1 ]; then
@@ -118,15 +98,48 @@ if [ -n "$CANDIDATES" ]; then
   fi
 fi
 state_of() { printf '%s\n' "$STATES" | awk -v s="$1" '$1 == s {print $2; exit}'; }
+# Kept-both links (session-diverge g): fork saved → original to the trash;
+# fork unknown to the supervisor and never saved (dead) → link dropped, the
+# original waits as diverged; otherwise the original waits, flagged.
+DROP=()
+while read -r act orig fork; do
+  case "$act" in
+    drop) DROP+=("$orig") ;;
+    trash)
+      if session-trash "$orig" >/dev/null </dev/null; then DROP+=("$orig"); TRASHED+=("$orig")
+      else PENDING+=("$orig"); fi ;;
+    pending)
+      PENDING+=("$orig")
+      [ -z "$SUP_OK" ] || [ "$(state_of "$fork")" != unknown ] || DROP+=("$orig") ;;
+  esac
+done <<< "$LINKS"
+if [ ${#DROP[@]} -gt 0 ]; then
+  python3 - "$FORKS" "${DROP[@]}" << 'PYEOF'
+import json, os, sys, tempfile
+path, *drop = sys.argv[1:]
+try:
+  d = json.load(open(path))
+  d = d if isinstance(d, dict) else {}
+except (OSError, ValueError):
+  d = {}
+for i in drop:
+  d.pop(i, None)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+  json.dump(d, fh, indent=2, sort_keys=True)
+os.replace(tmp, path)
+PYEOF
+fi
 NEW_DIV=(); KEEP=()
 while read -r sid n size sha f; do
   [ -n "$sid" ] || continue
+  ! in_list "$sid" "${TRASHED[@]:-}" || continue      # settled by its fork above
   if [ -z "$SUP_OK" ]; then
     KEEP+=("$sid"); echo "session-reconcile: état de ${sid:0:8} illisible — laissée en l'état" >&2; continue
   fi
   [ "$(state_of "$sid")" != running ] || { KEEP+=("$sid"); continue; }
   # Kept both, fork not saved yet: the original waits, flagged.
-  ! is_pending "$sid" || { NEW_DIV+=("$sid"); continue; }
+  ! in_list "$sid" "${PENDING[@]:-}" || { NEW_DIV+=("$sid"); continue; }
   # The same id under two project dirs: never guess which one to trash.
   [ "$n" -eq 1 ] || { NEW_DIV+=("$sid"); continue; }
   cur=$(session-fingerprint "$f" </dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["size"],d["sha256"])') || continue

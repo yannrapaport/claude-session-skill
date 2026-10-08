@@ -82,8 +82,8 @@ assert_eq "keep both: fork requested"  "yes" "$(grep -q -- "--resume $B --fork-s
 assert_eq "keep both: link recorded"   "{'$B': '$FORK'}" "$(forks_json)"
 assert_eq "keep both: original kept"   "yes" "$([ -f "$FB" ] && echo yes || echo no)"
 assert_eq "keep both: attached to fork" "mac attach f0f0f0f0" "$(tail -1 "$MTMP/claude.log")"
-# Fork not saved yet → reconcile leaves the original alone, still diverged.
-echo '[]' > "$M/.agents.json"
+# Fork not saved yet (still known to the supervisor) → reconcile leaves the
+# original alone, still diverged.
 on mac session-reconcile >/dev/null 2>&1
 assert_eq "fork pending: original kept"     "yes" "$([ -f "$FB" ] && echo yes || echo no)"
 assert_eq "fork pending: still diverged"    "$B"  "$(diverged_list)"
@@ -119,6 +119,37 @@ assert_eq "keep both, no fork: fails"         "1"   "$rc"
 assert_eq "keep both, no fork: original kept" "yes" "$([ -f "$FH" ] && echo yes || echo no)"
 assert_eq "keep both, no fork: no link"       "{}"  "$(forks_json)"
 assert_eq "keep both, no fork: no attach"     "no"  "$(grep -q attach "$MTMP/claude.log" && echo yes || echo no)"
+
+# Keep both while another session starts elsewhere → the same-cwd one is the fork.
+P=44440000-1111-2222-3333-444444444444
+FP=$(mk_session mac "$P" "$M/projects/tpg/rakam"); own_elsewhere "$P" "$FP"; echo '{"uuid":"late"}' >> "$FP"
+mkdir -p "$M/projects/tpg/other"; echo "$M/projects/tpg/other" > "$MTMP/extra.agent"
+rm -f "$(dirname "$FP")/$FORK.jsonl"; echo '[]' > "$M/.agents.json"; : > "$MTMP/claude.log"
+echo g | on mac session-diverge "$P" >/dev/null 2>&1
+assert_eq "fork by cwd: same-cwd one linked" "{'$P': '$FORK'}" "$(forks_json)"
+assert_eq "fork by cwd: attached to it"      "mac attach f0f0f0f0" "$(tail -1 "$MTMP/claude.log")"
+# That fork dies unsaved (gone from the supervisor, no transcript) → link dropped,
+# the original stays, still diverged.
+echo '[]' > "$M/.agents.json"
+on mac session-reconcile >/dev/null 2>&1
+assert_eq "dead fork: link dropped"      "{}"  "$(forks_json)"
+assert_eq "dead fork: original kept"     "yes" "$([ -f "$FP" ] && echo yes || echo no)"
+assert_eq "dead fork: still diverged"    "yes" "$(diverged_list | tr ' ' '\n' | grep -qx "$P" && echo yes || echo no)"
+# Supervisor unreadable → a pending link is kept.
+echo "{\"$P\": \"$FORK\"}" > "$M/.claude/session-forks.json"; echo garbage > "$M/.agents.json"
+on mac session-reconcile >/dev/null 2>&1 || true
+assert_eq "supervisor error: link kept"  "{'$P': '$FORK'}" "$(forks_json)"
+echo '{}' > "$M/.claude/session-forks.json"
+
+# Two new sessions elsewhere, none in this cwd → no guess, nothing written.
+printf '%s\n' "$M/projects/tpg/other" "$M" > "$MTMP/extra.agent"
+touch "$MTMP/nofork"; echo '[]' > "$M/.agents.json"; : > "$MTMP/claude.log"
+rc=0; echo g | SESSION_FORK_WAIT=1 on mac session-diverge "$P" >/dev/null 2>&1 || rc=$?
+rm -f "$MTMP/nofork" "$MTMP/extra.agent"; echo '[]' > "$M/.agents.json"
+assert_eq "fork ambiguous: fails"         "1"   "$rc"
+assert_eq "fork ambiguous: no link"       "{}"  "$(forks_json)"
+assert_eq "fork ambiguous: no attach"     "no"  "$(grep -q attach "$MTMP/claude.log" && echo yes || echo no)"
+assert_eq "fork ambiguous: original kept" "yes" "$([ -f "$FP" ] && echo yes || echo no)"
 
 # Supervisor, several ids in one read.
 echo "[{\"sessionId\":\"$C\",\"pid\":7},{\"sessionId\":\"$D\",\"state\":\"stopped\"}]" > "$M/.agents.json"

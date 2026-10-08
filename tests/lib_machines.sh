@@ -88,7 +88,9 @@ EOF
 # --resume --fork-session --bg → like the real one: prints an ANSI-colored line,
 # writes NO transcript (that waits for the first prompt), and registers the fork
 # (f0f0f0f0-…, pid, status idle, cwd) in $HOME/.agents.json — unless
-# $MTMP/nofork exists (line printed, nothing registered).
+# $MTMP/nofork exists (line printed, nothing registered). $MTMP/extra.agent
+# (one cwd per line): unrelated sessions started meanwhile, registered too
+# (e0e0e0e<n>-…), listed before the fork.
 m=$(basename "$HOME")
 echo "$m $*" >> "$MTMP/claude.log"
 case "$1" in
@@ -96,12 +98,17 @@ case "$1" in
   --resume)
     if [[ " $* " == *" --fork-session "* ]]; then
       printf 'backgrounded · \033[36mf0f0f0f0\033[39m\033[2m (idle — send a prompt to start)\033[22m\n'
-      [ -e "$MTMP/nofork" ] || python3 - "$HOME/.agents.json" "$PWD" <<'PY'
-import json, sys
-p, cwd = sys.argv[1:]
+      python3 - "$HOME/.agents.json" "$PWD" "$MTMP/extra.agent" "$MTMP/nofork" <<'PY'
+import json, os, sys
+p, cwd, extra, nofork = sys.argv[1:]
 try: d = json.load(open(p))
 except (OSError, ValueError): d = []
-d.append({"pid": 999, "id": "f0f0f0f0", "sessionId": "f0f0f0f0-0000-0000-0000-000000000000",
+if os.path.exists(extra):
+    for n, c in enumerate(l.strip() for l in open(extra) if l.strip()):
+        d.append({"pid": 900 + n, "sessionId": "e0e0e0e%d-0000-0000-0000-000000000000" % n,
+                  "status": "idle", "cwd": c})
+if not os.path.exists(nofork):
+  d.append({"pid": 999, "id": "f0f0f0f0", "sessionId": "f0f0f0f0-0000-0000-0000-000000000000",
           "status": "idle", "state": "blocked", "cwd": cwd})
 json.dump(d, open(p, "w"))
 PY
