@@ -103,7 +103,7 @@ Pour chaque session locale dont `meta.owner` ≠ cette machine :
 | JSONL plus long, préfixe identique (sha256 des `size` premiers octets) | **Divergente** : laissée intacte, marquée dans l'inventaire (`diverged: true`). |
 | Autre | **Divergente**, idem. |
 
-Résolution d'une divergence depuis l'interface : garder les deux (la copie locale devient une session à part entière, propriétaire local, via un nouvel id `--fork-session`) ou mettre l'une à la corbeille.
+Résolution d'une divergence depuis l'interface, sur la machine qui porte la copie divergente : garder les deux (la copie locale repart sous un nouvel id via `--fork-session`, l'original local va en corbeille) ou mettre la copie locale à la corbeille. La copie migrée se met à la corbeille depuis sa propre machine (`ctrl-x`).
 
 À la migration Mac → Nexus, la réplique de cette session est supprimée sur Nexus une fois l'installation poussée.
 
@@ -144,13 +144,13 @@ Sur Nexus, `claude` n'est pas dans le PATH d'un ssh non interactif : chemin abso
 - `sessions --plain` : tableau actuel (scripts, `/session:list`).
 
 ### Ligne
-`priorité · âge · machine propriétaire · sujet · titre · tours · marqueurs`
+`priorité · âge · machine propriétaire (m/n) · sujet · titre · marqueurs` — compacte, le volet fait ~35 colonnes.
 Titre = `/rename` > ai-title > premier prompt. Marqueurs : `●` en cours, `⇢` réplique en retard sur la source, `⚠` divergente.
 
 ### Touches
 | Touche | Action |
 |--------|--------|
-| frappe | filtre flou (titre, sujet, premier prompt) |
+| frappe | filtre flou sur la ligne affichée (le titre retombe sur le premier prompt quand il n'y en a pas) |
 | `Entrée` | reprendre / migrer dans le volet principal ; sur `⚠`, menu de résolution |
 | `ctrl-a` | sujet courant ↔ toutes les sessions |
 | `ctrl-s` | tri : activité → projet + activité → priorité + activité |
