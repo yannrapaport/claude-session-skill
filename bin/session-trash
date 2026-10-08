@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# session-trash [--ask] <session-id> — move a local session (transcript, its
+# directory, its file-history) to ~/.claude/session-trash/<date>/<id>/.
+# Never deletes; session-reconcile empties trash older than 30 days.
+# Refuses a session that is running here.
+set -euo pipefail
+ASK=""; [ "${1:-}" = --ask ] && { ASK=1; shift; }
+SID="${1:?usage: session-trash [--ask] <session-id>}"
+[[ "$SID" =~ ^[0-9a-fA-F-]+$ ]] || { echo "session-trash: identifiant invalide « $SID »" >&2; exit 1; }
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+shopt -s nullglob
+F=("$CLAUDE_DIR"/projects/*/"$SID".jsonl)
+[ ${#F[@]} -gt 0 ] || { echo "session-trash: ${SID:0:8} absente de cette machine" >&2; exit 1; }
+# Fail closed: an unreadable supervisor is not a stopped session.
+ST=$(session-agents-state "$SID") || { echo "session-trash: état de ${SID:0:8} illisible — rien déplacé" >&2; exit 1; }
+if [ "$ST" = running ]; then
+  echo "session-trash: ${SID:0:8} tourne — arrête-la d'abord (claude stop ${SID:0:8})" >&2; exit 1
+fi
+if [ -n "$ASK" ]; then
+  read -r -p "Mettre ${SID:0:8} à la corbeille ? [o/N] " a
+  [ "$a" = o ] || [ "$a" = O ] || exit 0
+fi
+T="$CLAUDE_DIR/session-trash/$(date +%F)/$SID"
+mkdir -p "$T"
+dirname "${F[0]}" > "$T/origin"            # where it came from, to put it back by hand
+mv "${F[0]}" "$T/"
+[ -d "${F[0]%.jsonl}" ] && mv "${F[0]%.jsonl}" "$T/"
+[ -d "$CLAUDE_DIR/file-history/$SID" ] && mv "$CLAUDE_DIR/file-history/$SID" "$T/file-history"
+echo "→ corbeille : $T"

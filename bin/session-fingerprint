@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# session-fingerprint <jsonl>                        {"size","sha256","last_uuid"}
+# session-fingerprint --prefix <jsonl> <size> <sha>  exit 0 when the file's first
+#   <size> bytes hash to <sha>: the transcript grew from that exact state.
+set -euo pipefail
+python3 - "$@" << 'PYEOF'
+import hashlib, json, os, sys
+a = sys.argv[1:]
+
+def sha(path, limit=None):
+    h = hashlib.sha256()
+    left = limit
+    with open(path, "rb") as f:
+        while left is None or left > 0:
+            chunk = f.read(1 << 20 if left is None else min(1 << 20, left))
+            if not chunk:
+                break
+            h.update(chunk)
+            if left is not None:
+                left -= len(chunk)
+    return h.hexdigest()
+
+if a[0] == "--prefix":
+    path, size, want = a[1], int(a[2]), a[3]
+    sys.exit(0 if os.path.getsize(path) >= size and sha(path, size) == want else 1)
+
+path = a[0]
+last = ""
+with open(path, errors="ignore") as f:
+    for line in f:
+        try:
+            u = json.loads(line).get("uuid")
+        except ValueError:
+            continue
+        if u:
+            last = u
+print(json.dumps({"size": os.path.getsize(path), "sha256": sha(path), "last_uuid": last}))
+PYEOF
