@@ -23,12 +23,18 @@ main() {
   inner="$1 || { s=\$?; echo \"échec (\$s) — ⏎ pour revenir\"; read -r _; }; exec $(printf %q "$BIN/session-home") $(printf %q "$subj")"
   tmux respawn-pane -k -t "$pane" "env PATH=$(printf %q "$BIN:$PATH") bash -c $(sq "$inner")"
 }
+valid_id() { [[ "$1" =~ ^[0-9a-fA-F-]+$ ]] || { echo "session-tui-act: identifiant invalide « $1 »" >&2; tmux display-message "identifiant invalide" 2>/dev/null || true; exit 1; }; }
+case "${1:-}" in
+  open|trash) valid_id "${2:-}" ;;
+esac
 case "${1:-}" in
   open)
-    SID="$2"; THIS=$(session-config machine)
+    SID="${2:-}"; THIS=$(session-config machine)
     OWNER=$(session-metastore get "$SID" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')
     [ -n "$OWNER" ] || OWNER=$(session-registry-get "$SID" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("machine",""))')
-    DIV=$(session-registry-get "$SID" | python3 -c 'import json,sys;print("1" if json.load(sys.stdin).get("diverged") else "")')
+    # Diverged is a fact about THIS machine's copy: another machine's flag
+    # (the stale copy that kept going) must not route the owner's own copy.
+    DIV=$(session-registry-get --machine "$THIS" "$SID" | python3 -c 'import json,sys;print("1" if json.load(sys.stdin).get("diverged") else "")')
     Q=$(printf %q "$SID")
     if [ -n "$DIV" ]; then main "session-diverge $Q"
     elif [ "$OWNER" = "$THIS" ] || [ -z "$OWNER" ]; then main "session-open $Q"

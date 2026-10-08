@@ -7,7 +7,8 @@
 #      session-reconcile trashes the original once the fork's transcript exists.
 #      Then attaches to the fork.
 #   c  put this local copy in the trash
-# Refuses a session running here, or whose supervisor state is unreadable.
+# Refuses a session running here, whose supervisor state is unreadable, or
+# that this machine owns (its copy is the authoritative one).
 # The fork is the new supervisor session in this copy's cwd (realpath); at the
 # timeout, a new session elsewhere is accepted only if it is the only new one.
 # SESSION_FORK_WAIT: seconds to wait for the fork to show up (default 10).
@@ -19,6 +20,10 @@ CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
 FORKS="$CLAUDE_DIR/session-forks.json"
 OWNER=$(session-metastore get "$SID" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("owner","?") if isinstance(d,dict) else "?")')
+THIS=$(session-config machine)
+# The owner's copy is the authoritative one: nothing to settle, and forking or
+# trashing it would lose the session.
+[ "$OWNER" != "$THIS" ] || { echo "session-diverge: $SHORT appartient à $THIS — cette copie fait foi, rien à régler ici" >&2; exit 1; }
 shopt -s nullglob
 F=("$CLAUDE_DIR"/projects/*/"$SID".jsonl)
 [ ${#F[@]} -gt 0 ] || { echo "$SHORT n'est plus ici." >&2; exit 0; }

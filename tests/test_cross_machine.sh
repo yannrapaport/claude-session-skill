@@ -46,4 +46,36 @@ assert_eq "C1: lands in the Mac's original directory" "yes" "$(yn test -f "$M/.c
 assert_eq "C1: mac override = original cwd" "$M/projects/tpg/rakam" "$(cat "$M/.claude/session-cwd-override/$R" 2>/dev/null)"
 assert_eq "C1: nexus copy settled" "no" "$(yn test -f "$N/.claude/projects/$NENC/$R.jsonl")"
 
+# ── C2: a diverged copy elsewhere never routes the owner's copy ──────────────
+X=c2c2c2c2-1111-2222-3333-444444444444
+FX=$(mk_session nexus "$X" "$N/projects/tpg/rakam")
+on nexus session-metastore set "$X" owner '"nexus"'
+python3 - "$N/.claude/session-hub/registry.json" "$X" <<'PY'
+import json, sys
+p, x = sys.argv[1:]
+d = json.load(open(p))
+d["machines"].setdefault("mac", {})[x] = {"cwd": "/m", "last_activity": "2099-01-01T00:00:00Z", "diverged": True}
+d["machines"].setdefault("nexus", {})[x] = {"cwd": "/n", "last_activity": "2026-01-01T00:00:00Z", "diverged": False}
+json.dump(d, open(p, "w"))
+PY
+assert_eq "C2: registry-get --machine" "nexus False" \
+  "$(on nexus session-registry-get --machine nexus "$X" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["machine"],d["diverged"])')"
+assert_eq "C2: registry-get --machine absent" "{}" "$(on nexus session-registry-get --machine elsewhere "$X")"
+export SESSIONS_STATE="$MTMP/st"
+: > "$MTMP/tmux.log"
+on nexus session-tui-act open "$X"
+case "$(tail -1 "$MTMP/tmux.log")" in
+  *session-diverge*) r=diverge ;; *"session-open $X"*) r=open ;; *) r="$(tail -1 "$MTMP/tmux.log")" ;; esac
+assert_eq "C2: owner opens its own copy (not the diverge menu)" "open" "$r"
+unset SESSIONS_STATE
+git -C "$N/.claude/session-hub" checkout -q -- registry.json   # drop the hand-made entries
+rc=0; echo c | on nexus session-diverge "$X" >/dev/null 2>&1 || rc=$?
+assert_eq "C2: diverge refused on the owner" "1" "$rc"
+assert_eq "C2: owner's copy untouched" "yes" "$(yn test -f "$FX")"
+FORK=f2f2f2f2-1111-2222-3333-444444444444
+mk_session nexus "$FORK" "$N/projects/tpg/rakam" >/dev/null
+echo "{\"$X\": \"$FORK\"}" > "$N/.claude/session-forks.json"
+on nexus session-reconcile >/dev/null 2>&1
+assert_eq "C2: link to a locally owned original never trashes it" "yes" "$(yn test -f "$FX")"
+
 machines_teardown

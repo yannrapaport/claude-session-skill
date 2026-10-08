@@ -6,7 +6,8 @@
 #   identical to fingerprint   trash (session-trash: moved, never deleted)
 #   anything else              diverged: untouched, listed in session-diverged.json
 #   (the same id under two project dirs is always diverged, never trashed)
-# First, kept-both forks (session-diverge g, session-forks.json orig → fork):
+# First, kept-both forks (session-diverge g, session-forks.json orig → fork),
+# skipping any original this machine owns (left untouched, link kept):
 #   fork transcript saved      original trashed, link dropped
 #   original gone              link dropped
 #   fork not saved yet         original untouched, stays diverged
@@ -29,17 +30,27 @@ FORKS="$CLAUDE_DIR/session-forks.json"
 LINKS=""
 if [ -f "$FORKS" ]; then
   # One line per kept-both link: <trash|drop|pending> <original sid> <fork sid>
-  LINKS=$(python3 - "$FORKS" "$CLAUDE_DIR" "$ONE" << 'PYEOF'
+  LINKS=$(python3 - "$FORKS" "$CLAUDE_DIR" "$ONE" "$META" "$THIS" << 'PYEOF'
 import glob, json, os, re, sys
-path, cdir, one = sys.argv[1:]
+path, cdir, one, meta_path, this = sys.argv[1:]
 try:
     d = json.load(open(path))
 except (OSError, ValueError):
     d = {}
+try:
+    meta = json.load(open(meta_path))
+    meta = meta if isinstance(meta, dict) else {}
+except (OSError, ValueError):
+    meta = {}
+def owned_here(i):
+    m = meta.get(i)
+    return isinstance(m, dict) and m.get("owner") == this
 ok = lambda i: isinstance(i, str) and re.fullmatch(r"[0-9a-fA-F-]+", i)
 here = lambda i: glob.glob(os.path.join(cdir, "projects", "*", i + ".jsonl"))
 for orig, fork in (d.items() if isinstance(d, dict) else []):
     if not ok(orig) or (one and orig != one):
+        continue
+    if owned_here(orig):      # the authoritative copy: a link never trashes it
         continue
     if not ok(fork):
         print("drop", orig, "-")
