@@ -25,7 +25,16 @@ CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 RPATH='PATH=$HOME/.claude/skills/session/bin:$HOME/.local/bin:$PATH'
 say() { printf '%s\n' "$*" >&2; }
-confirm() { [ "$YES" = --yes ] && return 0; read -r -p "$1 [o/N] " a; [ "$a" = o ] || [ "$a" = O ]; }
+# No terminal (e.g. Claude's Bash tool): nobody can answer — say so and how to go on.
+confirm() {
+  [ "$YES" = --yes ] && return 0
+  if [ ! -t 0 ]; then
+    say "confirmation requise, mais pas de terminal pour la demander : « $1 »"
+    say "→ migration annulée. Relance avec --yes une fois d'accord (session-migrate $SID --yes), ou ouvre la session depuis la liste (sessions / cc tmux)."
+    return 1
+  fi
+  local a=""; read -r -p "$1 [o/N] " a || true; [ "$a" = o ] || [ "$a" = O ]
+}
 # -n: no remote command reads stdin (confirm() does, locally).
 SSH_OPTS=(-n -o ConnectTimeout=5 -o BatchMode=yes)
 RSH="ssh -o ConnectTimeout=5 -o BatchMode=yes"

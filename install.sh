@@ -95,12 +95,6 @@ else
   echo "⚠  Could not auto-enable. Run manually:  claude plugin enable session@claude-session-skill"
 fi
 
-# ── 2c. Claude Code settings: retention + replication hook ───────────────────
-
-PATH="$BIN_DIR:$PATH" session-install-settings "$HOME/.claude/settings.json" \
-  "$INSTALL_DIR/hooks/stop-replicate" \
-  "$(grep -q '^replica_to:' "$CONFIG" 2>/dev/null && echo 1 || echo 0)"
-
 # ── 3. Add bin/ to PATH ───────────────────────────────────────────────────────
 
 PROFILE=""
@@ -157,6 +151,14 @@ home: $home
 EOF
   echo "✓  Config written to $CONFIG"
 fi
+
+# ── 4b. Claude Code settings: retention + replication hook ───────────────────
+# After step 4: the Stop hook is wired from the config's replica_to, which must
+# exist by now (an upgrade adds the key to the config before re-running this).
+
+PATH="$BIN_DIR:$PATH" session-install-settings "$HOME/.claude/settings.json" \
+  "$INSTALL_DIR/hooks/stop-replicate" \
+  "$(grep -q '^replica_to:' "$CONFIG" 2>/dev/null && echo 1 || echo 0)"
 
 # ── Sessions consolidation: migrate registry + schedule jobs ─────────────────
 if [ -f "$HOME/.claude/session-migrate.yml" ]; then

@@ -118,6 +118,7 @@ assert_eq "I1 conflict: local meta not owned by nexus" "" \
   "$(on nexus session-metastore get "$S2" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')"
 assert_eq "I1 conflict: hub clone clean" "" "$(git -C "$N/.claude/session-hub" status --porcelain -- "meta/$S2.json")"
 
+# ── I4: a confirmation outside a terminal says why and how ───────────────────
 # ── I2: a replica the Stop hook recreates after a from-replica migration ─────
 G=e2e2e2e2-1111-2222-3333-444444444444
 GF=$(mk_session mac "$G" "$M/projects/tpg/rakam")
@@ -125,6 +126,9 @@ touch -t 202001010000 "$GF"
 on mac session-index-scan >/dev/null 2>&1
 on mac session-replicate "$G"
 down mac
+rc=0; out=$(on nexus session-migrate "$G" </dev/null 2>&1) || rc=$?
+assert_eq "I4: no tty: refused" "1" "$rc"
+assert_eq "I4: no tty: says how to proceed" "yes" "$(yn grep -q -- "--yes" <<<"$out")"
 rc=0; on nexus session-migrate "$G" --yes >/dev/null 2>&1 || rc=$?
 up mac
 assert_eq "I2: from replica: migrates" "0" "$rc"

@@ -21,3 +21,9 @@ session-install-settings "$S" "$H" 1 >/dev/null
 assert_eq "does not lower retention" "9999" "$(_get "s['cleanupPeriodDays']")"
 assert_eq "keeps existing hook, adds ours" "2" "$(_get "len(s['hooks']['Stop'])")"
 rm -rf "$TMP"
+
+# install.sh wires the hook from the config: only once the config is written.
+I="$SCRIPT_DIR/../install.sh"
+CFG_LINE=$(grep -n 'cat > "$CONFIG"' "$I" | head -1 | cut -d: -f1)
+HOOK_LINE=$(grep -n 'session-install-settings' "$I" | grep -v '^[0-9]*:#' | head -1 | cut -d: -f1)
+assert_eq "install.sh: hook wired after the config step" "yes" "$([ "$HOOK_LINE" -gt "$CFG_LINE" ] && echo yes || echo no)"

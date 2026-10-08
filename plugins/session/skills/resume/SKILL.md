@@ -49,12 +49,27 @@ Checkpoints now live in the ai-brain vault (semantic) — point the user at them
 rather than auto-loading: tell them they can run `/ai-brain:restore` for the
 matching project if they want the work summary. Do not block resume on this.
 
-### 3. Open it
-A skill cannot switch the running session. Hand it to the session manager:
+### 3. Migrate it here
 ```bash
-# migrate is a no-op for a local session; it asks before stopping a running source
-session-migrate "$SID" && session-open "$SID"   # open = attach (or revive in its own cwd, then attach)
+session-migrate "$SID"    # no-op (exit 0) for a session already on this machine
 ```
-`session-open` replaces this terminal, so from Claude Code run it through the
-session layout instead: tell the user to pick the session in `sessions`
+From the Bash tool there is no terminal, so `session-migrate` cannot ask its
+own questions. When it needs a confirmation it stops (exit 1) and prints
+« confirmation requise … » with the question — e.g. the other machine is
+asleep and the copy would come from the replica (its age is shown), or the
+session is running over there and would be stopped. Then:
+1. Relay the question to the user in chat, with the details it printed
+   (replica date and last known activity, or that the source will be stopped).
+2. Only once they agree, re-run with `--yes`:
+   ```bash
+   session-migrate "$SID" --yes
+   ```
+   If they decline, stop there — nothing was copied or stopped.
+Any other failure message (hub busy, directory missing here…): show it as is
+and stop.
+
+### 4. Open it
+A skill cannot switch the running session. `session-open "$SID"` (attach, or
+revive in its own cwd, then attach) replaces the terminal it runs in, so do
+not run it from the Bash tool; once migrated, hand it to the session layout: tell the user to pick the session in `sessions`
 (or `cc tmux <subject>`), where the main pane opens it in place.

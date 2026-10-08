@@ -81,9 +81,23 @@ New config keys:
 |-----|-------------|
 | `subjects_file` | zsh file defining `CC_DIRS` (subject → root), shared with `cc` |
 | `replica_to` | Mac only: peer that receives a replica of this machine's sessions; also wires the Stop hook |
-| `claude_bin` | Path to `claude` when it is not on the non-interactive `PATH` (Nexus) |
+| `claude_bin` | Absolute path to `claude` — set it on **both** machines: launchd (Mac) and cron (Nexus) run the scan with a minimal `PATH` that usually lacks `claude`, and without it every reconcile fails closed (nothing settled; `session-reconcile … illisible` in `/tmp/session-index.err` or `/tmp/session-index.log`) |
 
 `install.sh` also raises `cleanupPeriodDays` to at least 365 in `~/.claude/settings.json` (via `session-install-settings`) so Claude Code does not purge transcripts before the session tools do. Nexus needs fzf >= 0.50 in `~/.local/bin`.
+
+### Mise à jour d'une installation existante
+
+Dans cet ordre, sur les deux machines sauf mention contraire :
+
+1. `cc` : merger la branche puis `git pull` sur le Mac **et** sur Nexus (le zshrc lit `subjects.zsh` fourni par `cc`).
+2. dotfiles : merger puis `git pull` sur les deux machines.
+3. Ajouter les clés de config dans `~/.claude/session-migrate.yml` :
+   - `subjects_file` — les deux machines ;
+   - `replica_to: nexus` — **Mac uniquement** ;
+   - `claude_bin: <chemin absolu de claude>` — les deux machines (`command -v claude` dans un shell interactif).
+4. Relancer `bash install.sh` sur les deux machines — **après** l'étape 3 : c'est lui qui branche le Stop hook à partir de `replica_to`.
+5. Nexus : installer fzf >= 0.50 dans `~/.local/bin`.
+6. cron (Nexus) et launchd (Mac) : rien à changer.
 
 ---
 
@@ -129,7 +143,7 @@ Copy `config.yml.template` to `~/.claude/session-migrate.yml` and fill in your v
 | `peer_<machine>` | ssh target for each **other** machine (anything `ssh` accepts: alias, `user@host`, Tailscale hostname) | one per peer |
 | `subjects_file` | zsh file defining `CC_DIRS` (shared with `cc`) | none |
 | `replica_to` | Mac only: peer receiving a replica; enables the Stop hook | none |
-| `claude_bin` | Path to `claude` if not on `PATH` | `claude` |
+| `claude_bin` | Absolute path to `claude`; needed on both machines for the scheduled scan (launchd/cron `PATH`) | `claude` |
 | `gc_process_idle_hours` | Idle threshold (hours) before a detached `claude` process is killed | `6` |
 | `gc_archive_days` | Sessions inactive longer than this (days) are archived | `10` |
 | `gc_purge_days` | Delete archived JSONL after this many days (`0` = never) | `0` |
