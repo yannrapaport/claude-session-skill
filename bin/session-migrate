@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# session-migrate <session-id> [--yes] — move a session that another machine
+# owns onto this one. Run it from the destination.
+#   source reachable   copy from it (stopping it first, after asking, if running)
+#   source unreachable copy from the local replica, after showing its age
+# Then install, record the new owner in meta/ and push. A failed push undoes
+# the install: a migration only exists once the hub has it. The source copy is
+# then reconciled (trashed if untouched), right away if reachable, else at its
+# next scan.
+# Push rejected because the hub moved on meanwhile: our commit (meta/<id>.json
+# only) is rebased onto it and pushed again (twice at most); a rebase conflict
+# rolls back like any refused push.
+# Push error that can't be checked (fetch fails too): nothing is undone — the
+# install and the local commit stay, a warning says the next push will confirm
+# it, exit 0.
+# Hub lock: session-hub-sync runs (and locks) before; the lock is then taken
+# from the first install through the push or the rollback. No hub tool runs
+# while it is held.
+set -euo pipefail
+SID="${1:?usage: session-migrate <session-id> [--yes]}"; YES="${2:-}"
+[[ "$SID" =~ ^[0-9a-fA-F-]+$ ]] || { echo "session-migrate: identifiant invalide « $SID »" >&2; exit 1; }
+SHORT="${SID:0:8}"
+THIS=$(session-config machine)
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+RPATH='PATH=$HOME/.claude/skills/session/bin:$HOME/.local/bin:$PATH'
+say() { printf '%s\n' "$*" >&2; }
+# No terminal (e.g. Claude's Bash tool): nobody can answer — say so and how to go on.
+confirm() {
+  [ "$YES" = --yes ] && return 0
+  if [ ! -t 0 ]; then
+    say "confirmation requise, mais pas de terminal pour la demander : « $1 »"
+    say "→ migration annulée. Relance avec --yes une fois d'accord (session-migrate $SID --yes), ou ouvre la session depuis la liste (sessions / cc tmux)."
+    return 1
+  fi
+  local a=""; read -r -p "$1 [o/N] " a || true; [ "$a" = o ] || [ "$a" = O ]
+}
+# -n: no remote command reads stdin (confirm() does, locally).
+SSH_OPTS=(-n -o ConnectTimeout=5 -o BatchMode=yes)
+RSH="ssh -o ConnectTimeout=5 -o BatchMode=yes"
+jget() { python3 -c 'import json,sys;print(json.load(sys.stdin).get(sys.argv[1],"") or "")' "$1"; }
+
+session-hub-sync >/dev/null 2>&1 || { say "hub injoignable — migration impossible"; exit 1; }
+OWNER=$(session-metastore get "$SID" | jget owner)
+[ -n "$OWNER" ] || OWNER=$(session-registry-get "$SID" | jget machine)
+[ -n "$OWNER" ] || { say "$SHORT inconnue de l'index"; exit 1; }
+[ "$OWNER" != "$THIS" ] || { say "$SHORT est déjà sur $THIS"; exit 0; }
+PEER=$(session-config "peer_$OWNER")
+# The source machine's own registry entry (not the freshest across machines).
+SRCE=$(python3 -c 'import json,sys
+d=json.load(open(sys.argv[1])); print(json.dumps(d.get("machines",{}).get(sys.argv[2],{}).get(sys.argv[3],{})))' \
+  "$HUB_DIR/registry.json" "$OWNER" "$SID")
+
+# Refuse before copying anything: an older copy of this id already here
+# (e.g. a pre-migration /session:resume) must be settled by hand first.
+shopt -s nullglob
+HERE=("$CLAUDE_DIR"/projects/*/"$SID".jsonl)
+[ ${#HERE[@]} -eq 0 ] || { say "$SHORT existe déjà ici (${HERE[0]}) — mets cette copie à la corbeille d'abord"; exit 1; }
+HERED=("$CLAUDE_DIR"/projects/*/"$SID")
+[ ${#HERED[@]} -eq 0 ] || { say "un répertoire $SHORT orphelin existe déjà ici (${HERED[0]}) — range-le d'abord"; exit 1; }
+[ ! -e "$CLAUDE_DIR/file-history/$SID" ] || { say "file-history/$SID existe déjà ici"; exit 1; }
+
+# Staged on the destination filesystem: the install is a plain rename.
+mkdir -p "$CLAUDE_DIR"
+STAGE=$(mktemp -d "$CLAUDE_DIR/.migrate.XXXXXX")
+TOKEN=""
+cleanup() { rm -rf "$STAGE"; [ -z "$TOKEN" ] || session-hub-lock release "$TOKEN"; }
+trap cleanup EXIT
+
+# Where the session came from, and where it lands here — settled before the
+# source is touched (no stop for a migration that can't land).
+REACHABLE=""
+if ssh -n -o ConnectTimeout=3 -o BatchMode=yes "$PEER" true 2>/dev/null; then
+  REACHABLE=1
+  INFO="$SRCE"
+  SCWD=$(echo "$SRCE" | jget cwd)
+  [ -n "$SCWD" ] || { say "$SHORT : répertoire source inconnu (scan de $OWNER pas encore passé ?)"; exit 1; }
+else
+  REP="$CLAUDE_DIR/session-replica/$OWNER/$SID"
+  [ -f "$REP/$SID.jsonl" ] || { say "$OWNER injoignable et aucune réplique de $SHORT ici"; exit 1; }
+  INFO=$(cat "$REP/source.json")
+fi
+TCWD=$(session-target-cwd "$(echo "$INFO" | jget cc_subject)" "$(echo "$INFO" | jget cc_rel)" \
+       "$(echo "$INFO" | jget project_relative)") || exit 1
+DEST="$CLAUDE_DIR/projects/$(session-encode-path "$TCWD")"
+
+if [ -n "$REACHABLE" ]; then
+  # Fail closed: an unreadable supervisor over there is not a stopped session.
+  ST=$(ssh "${SSH_OPTS[@]}" "$PEER" "$RPATH session-agents-state $SID") \
+    || { say "état de $SHORT sur $OWNER illisible — migration annulée"; exit 1; }
+  if [ "$ST" = running ]; then
+    confirm "$SHORT tourne sur $OWNER. L'arrêter et la migrer ?" || exit 1
+    ssh "${SSH_OPTS[@]}" "$PEER" "$RPATH \$(session-config claude_bin 2>/dev/null || echo claude) stop $SHORT" >/dev/null \
+      || { say "arrêt de $SHORT sur $OWNER impossible — migration annulée"; exit 1; }
+    # Copy only once the source has really let go of the transcript.
+    WAIT=${SESSION_STOP_WAIT:-10}; i=0
+    while :; do
+      ST=$(ssh "${SSH_OPTS[@]}" "$PEER" "$RPATH session-agents-state $SID") \
+        || { say "état de $SHORT sur $OWNER illisible — migration annulée"; exit 1; }
+      [ "$ST" = running ] || break
+      i=$((i + 1))
+      [ "$i" -lt $((WAIT * 2)) ] || { say "$SHORT tourne toujours sur $OWNER — migration annulée"; exit 1; }
+      sleep 0.5
+    done
+  fi
+  SENC=$(session-encode-path "$SCWD")
+  rsync -a -e "$RSH" "$PEER:.claude/projects/$SENC/$SID.jsonl" "$STAGE/" || { say "copie depuis $OWNER impossible"; exit 1; }
+  # All parts or nothing: ask which optional parts exist, then any copy error aborts.
+  PARTS=$(ssh "${SSH_OPTS[@]}" "$PEER" "test -d .claude/projects/$SENC/$SID && echo dir; test -d .claude/file-history/$SID && echo fh; true") \
+    || { say "copie depuis $OWNER impossible"; exit 1; }
+  if grep -qx dir <<<"$PARTS"; then
+    rsync -a -e "$RSH" "$PEER:.claude/projects/$SENC/$SID/" "$STAGE/$SID/" \
+      || { say "copie de $SID/ depuis $OWNER impossible — migration annulée"; exit 1; }
+  fi
+  if grep -qx fh <<<"$PARTS"; then
+    rsync -a -e "$RSH" "$PEER:.claude/file-history/$SID/" "$STAGE/file-history/" \
+      || { say "copie de file-history/$SID depuis $OWNER impossible — migration annulée"; exit 1; }
+  fi
+else
+  say "$OWNER injoignable — réplique du $(echo "$INFO" | jget replicated_at), dernière activité connue sur $OWNER : $(echo "$SRCE" | jget last_activity)"
+  confirm "Migrer depuis la réplique ?" || exit 1
+  cp -Rp "$REP/." "$STAGE/" || { say "copie de la réplique impossible — migration annulée"; exit 1; }
+  rm -f "$STAGE/source.json"
+fi
+
+# Hub writers are serialized (session-hub-push takes the same lock).
+TOKEN=$(session-hub-lock acquire) || { say "migration annulée : hub occupé"; exit 1; }
+
+# From the first install until the push lands, every failure rolls back.
+META="meta/$SID.json"
+META_BAK="$STAGE/meta.bak"; META_SET=""
+DEST_NEW=""; [ -d "$DEST" ] || DEST_NEW=1
+INSTALLED=()
+# Where it lives here: the transcript keeps the source's cwd, every local
+# reader (session-cwd) takes this override instead.
+OVR="$CLAUDE_DIR/session-cwd-override/$SID"; OVR_SET=""
+# Undo everything this run did: installed copies (only paths that did not
+# exist before), our meta edit, a project dir we created (rmdir only).
+rollback() {
+  [ ${#INSTALLED[@]} -eq 0 ] || rm -rf "${INSTALLED[@]}"
+  if [ -n "$META_SET" ]; then
+    git -C "$HUB_DIR" reset -q -- "$META" 2>/dev/null || true
+    if [ -f "$META_BAK" ]; then cp "$META_BAK" "$HUB_DIR/$META"; else rm -f "$HUB_DIR/$META"; fi
+  fi
+  if [ -n "$OVR_SET" ]; then
+    if [ -f "$STAGE/override.bak" ]; then cp "$STAGE/override.bak" "$OVR"; else rm -f "$OVR"; fi
+  fi
+  [ -z "$DEST_NEW" ] || rmdir "$DEST" 2>/dev/null || true
+  say "migration annulée : $1"; exit 1
+}
+# install_part <staged> <target>: never onto something that already exists.
+install_part() {
+  [ ! -e "$2" ] || rollback "$2 existe déjà — rien écrasé"
+  INSTALLED+=("$2")
+  mv "$1" "$2" || rollback "installation impossible"
+}
+mkdir -p "$DEST" "$CLAUDE_DIR/session-cwd-override" || rollback "installation impossible"
+install_part "$STAGE/$SID.jsonl" "$DEST/$SID.jsonl"
+[ ! -d "$STAGE/$SID" ] || install_part "$STAGE/$SID" "$DEST/$SID"
+if [ -n "$(ls -A "$STAGE/file-history" 2>/dev/null)" ]; then
+  mkdir -p "$CLAUDE_DIR/file-history" || rollback "installation impossible"
+  install_part "$STAGE/file-history" "$CLAUDE_DIR/file-history/$SID"
+fi
+
+if [ -f "$OVR" ]; then cp "$OVR" "$STAGE/override.bak" || rollback "sauvegarde de $OVR impossible"; fi
+OVR_SET=1
+echo "$TCWD" > "$OVR" || rollback "écriture de $OVR impossible"
+
+FP=$(session-fingerprint "$DEST/$SID.jsonl") || rollback "empreinte impossible"
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ) || rollback "date impossible"
+if [ -f "$HUB_DIR/$META" ]; then cp "$HUB_DIR/$META" "$META_BAK" || rollback "sauvegarde de $META impossible"; fi
+META_SET=1
+session-metastore set "$SID" owner "\"$THIS\"" || rollback "écriture de $META impossible"
+session-metastore set "$SID" migrated_from "\"$OWNER\"" || rollback "écriture de $META impossible"
+session-metastore set "$SID" migrated_at "\"$NOW\"" || rollback "écriture de $META impossible"
+session-metastore set "$SID" fingerprint "$FP" || rollback "écriture de $META impossible"
+# Commit only our meta file: unrelated local hub edits stay as they are.
+git -C "$HUB_DIR" add -- "$META" || rollback "commit du hub impossible"
+git -C "$HUB_DIR" commit -qm "migrate: $SHORT $OWNER → $THIS" -- "$META" || rollback "commit du hub impossible"
+OURS=$(git -C "$HUB_DIR" rev-parse HEAD) || rollback "commit du hub impossible"
+landed() {
+  local r
+  for r in origin/main origin/master; do
+    git -C "$HUB_DIR" merge-base --is-ancestor "$OURS" "$r" 2>/dev/null && return 0
+  done
+  return 1
+}
+upstream() {
+  local r
+  for r in origin/main origin/master; do
+    git -C "$HUB_DIR" rev-parse -q --verify "$r" >/dev/null && { echo "$r"; return 0; }
+  done
+  return 1
+}
+# The hub moved on since our sync (the other machine's scan pushed): replay our
+# one-file commit on top of it. A conflict aborts the rebase, HEAD back on OURS.
+replay() {
+  local up; up=$(upstream) || return 1
+  ! git -C "$HUB_DIR" merge-base --is-ancestor "$up" HEAD 2>/dev/null || return 1   # not a race
+  if ! git -C "$HUB_DIR" rebase -q --autostash "$up" >/dev/null 2>&1; then
+    git -C "$HUB_DIR" rebase --abort >/dev/null 2>&1 || true
+    return 1
+  fi
+  OURS=$(git -C "$HUB_DIR" rev-parse HEAD)
+}
+UNSURE=""; TRIES=0
+until git -C "$HUB_DIR" push -q origin HEAD 2>/dev/null; do
+  # The push may have reached the hub before failing: then the migration exists.
+  if ! git -C "$HUB_DIR" fetch -q origin 2>/dev/null; then
+    UNSURE=1; break    # can't tell: undoing a migration that may be recorded is worse
+  fi
+  landed && break
+  TRIES=$((TRIES + 1))
+  if [ "$TRIES" -gt 2 ] || ! replay; then
+    # Drop our commit only, and only if nothing was committed on top of it.
+    [ "$(git -C "$HUB_DIR" rev-parse HEAD)" != "$OURS" ] || git -C "$HUB_DIR" reset -q --soft HEAD~1
+    rollback "push du hub refusé"
+  fi
+done
+session-hub-lock release "$TOKEN"; TOKEN=""
+if [ -n "$UNSURE" ]; then
+  # Keep the replica and leave the source alone until the hub confirms.
+  say "⚠ push du hub non vérifiable — la migration de $SHORT est probablement enregistrée ; le commit local partira au prochain push, qui la confirmera"
+  say "✓ $SHORT installée sur $THIS ($TCWD)"
+  exit 0
+fi
+rm -rf "$CLAUDE_DIR/session-replica/$OWNER/$SID"     # a replica, now superseded
+if [ -n "$REACHABLE" ]; then
+  ssh "${SSH_OPTS[@]}" "$PEER" "$RPATH session-reconcile $SID" >/dev/null 2>&1 || say "nettoyage sur $OWNER reporté à son prochain scan"
+fi
+say "✓ $SHORT migrée de $OWNER vers $THIS ($TCWD)"

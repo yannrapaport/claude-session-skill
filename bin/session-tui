@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# session-tui [subject] — the list pane: an fzf that stays open. Enter acts on
+# the main pane through session-tui-act; the list reloads after every action.
+set -euo pipefail
+BIN=$(cd "$(dirname "$0")" && pwd)
+export PATH="$BIN:$PATH"
+SESSIONS_STATE=$(mktemp -d); export SESSIONS_STATE
+trap 'rm -rf "$SESSIONS_STATE"' EXIT
+echo activity > "$SESSIONS_STATE/sort"
+echo "${1:-}" > "$SESSIONS_STATE/subject"
+if [ -n "${1:-}" ]; then echo subject; else echo all; fi > "$SESSIONS_STATE/scope"
+: > "$SESSIONS_STATE/filter"
+session-hub-sync >/dev/null 2>&1 || true
+R='reload(session-rows)'
+A='execute-silent(session-tui-act'
+# Ctrl-C/abort restarts the list; only ^q (quit marker) ends the loop.
+while :; do
+session-rows | fzf --ansi --no-sort --layout=reverse --info=hidden \
+  --delimiter=$'\t' --with-nth=2 \
+  --header=$'⏎ ouvrir  ^s tri  ^a tout  ^q quitter\n⌥1-3/0 prio  ^x corbeille  ^r maj' \
+  --bind "enter:$A open {1})+$R" \
+  --bind "ctrl-x:$A trash {1})+$R" \
+  --bind "ctrl-s:$A sort)+$R" \
+  --bind "ctrl-a:$A scope)+$R" \
+  --bind "alt-p:$A filter prio)+$R" \
+  --bind "alt-m:$A filter mac)+$R" \
+  --bind "alt-n:$A filter nexus)+$R" \
+  --bind "alt-1:execute-silent(session-priority {1} must)+$R" \
+  --bind "alt-2:execute-silent(session-priority {1} should)+$R" \
+  --bind "alt-3:execute-silent(session-priority {1} may)+$R" \
+  --bind "alt-0:execute-silent(session-priority {1} none)+$R" \
+  --bind "ctrl-r:execute-silent(session-hub-sync)+$R" \
+  --bind "ctrl-q:execute-silent(touch $SESSIONS_STATE/quit)+abort" \
+  --bind "esc:clear-query" || true
+[ ! -e "$SESSIONS_STATE/quit" ] || break
+sleep 0.2
+done

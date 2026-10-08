@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Claude Code Stop hook — replicate the session that just answered, detached,
+# so the turn never waits on the network. Wired by install.sh where replica_to
+# is configured. Reads {"session_id": ...} on stdin; always exits 0.
+BIN="${SESSION_BIN:-$HOME/.claude/skills/session/bin}"
+SID=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null) || exit 0
+[ -n "$SID" ] || exit 0
+T=""; command -v timeout >/dev/null && T="timeout 20"
+( PATH="$BIN:$PATH" $T session-replicate "$SID" </dev/null >/dev/null 2>&1 & )
+exit 0

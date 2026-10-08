@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# session-install-settings <settings.json> <hook-path> <0|1>
+# Merge the session manager's needs into Claude Code settings: retention >= 365
+# days (never lowered), and the Stop replication hook when asked (idempotent).
+set -euo pipefail
+[ $# -eq 3 ] || { echo "usage: session-install-settings <settings.json> <hook-path> <0|1>" >&2; exit 2; }
+python3 - "$@" << 'PYEOF'
+import json, os, sys
+import stat, tempfile
+path, hook, wants_hook = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+# settings.json may be a symlink into a dotfiles repo (Nexus): write the real
+# file so the link survives, and keep its mode.
+real = os.path.realpath(path)
+try:
+    s = json.load(open(real, encoding="utf-8")) if os.path.exists(real) else {}
+except ValueError as e:
+    sys.exit(f"session-install-settings: {path} n'est pas du JSON valide ({e}) — laissé intact, corrige-le puis relance.")
+if not isinstance(s, dict):
+    sys.exit(f"session-install-settings: {path} ne contient pas un objet JSON — laissé intact.")
+# Claude Code purges transcripts after 30 days by default; the session tools
+# archive, replicate and trash on their own clock.
+s["cleanupPeriodDays"] = max(int(s.get("cleanupPeriodDays", 0) or 0), 365)
+if wants_hook:
+    stop = s.setdefault("hooks", {}).setdefault("Stop", [])
+    if not any(h.get("command") == hook for e in stop for h in e.get("hooks", [])):
+        stop.append({"hooks": [{"type": "command", "command": hook}]})
+mode = stat.S_IMODE(os.stat(real).st_mode) if os.path.exists(real) else 0o644
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real) or ".", suffix=".tmp")
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    json.dump(s, fh, indent=2, ensure_ascii=False); fh.write("\n")
+os.chmod(tmp, mode)
+os.replace(tmp, real)
+print("✓  settings: cleanupPeriodDays ≥ 365" + (", Stop hook (replication)" if wants_hook else ""))
+PYEOF

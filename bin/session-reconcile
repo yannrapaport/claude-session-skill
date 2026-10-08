@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# session-reconcile [<session-id>] — settle local copies of sessions that
+# another machine now owns (meta.owner), after a migration:
+#   running here               untouched, diverged flag left as it was
+#   supervisor unreadable      untouched, diverged flag left as it was (fail closed)
+#   identical to fingerprint   trash (session-trash: moved, never deleted)
+#   anything else              diverged: untouched, listed in session-diverged.json
+#   (the same id under two project dirs is always diverged, never trashed)
+# First, kept-both forks (session-diverge g, session-forks.json orig → fork),
+# skipping any original this machine owns (left untouched, link kept):
+#   fork transcript saved      original trashed, link dropped
+#   original gone              link dropped
+#   fork not saved yet         original untouched, stays diverged
+#   fork unknown to supervisor and never saved  link dropped, original stays diverged
+# Full run (no id) also empties trash days older than 30 days.
+# With an id (called over ssh right after a migration) it syncs the hub first.
+set -euo pipefail
+ONE="${1:-}"
+if [ -n "$ONE" ] && ! [[ "$ONE" =~ ^[0-9a-fA-F-]+$ ]]; then
+  echo "session-reconcile: identifiant invalide « $ONE »" >&2; exit 1
+fi
+THIS=$(session-config machine)
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+[ -n "$CLAUDE_DIR" ] || { echo "session-reconcile: CLAUDE_DIR vide" >&2; exit 1; }
+DIV="$CLAUDE_DIR/session-diverged.json"
+[ -z "$ONE" ] || session-hub-sync >/dev/null 2>&1 || true
+META=$(mktemp); trap 'rm -f "$META"' EXIT
+session-metastore all > "$META"
+FORKS="$CLAUDE_DIR/session-forks.json"
+LINKS=""
+if [ -f "$FORKS" ]; then
+  # One line per kept-both link: <trash|drop|pending> <original sid> <fork sid>
+  LINKS=$(python3 - "$FORKS" "$CLAUDE_DIR" "$ONE" "$META" "$THIS" << 'PYEOF'
+import glob, json, os, re, sys
+path, cdir, one, meta_path, this = sys.argv[1:]
+try:
+    d = json.load(open(path))
+except (OSError, ValueError):
+    d = {}
+try:
+    meta = json.load(open(meta_path))
+    meta = meta if isinstance(meta, dict) else {}
+except (OSError, ValueError):
+    meta = {}
+def owned_here(i):
+    m = meta.get(i)
+    return isinstance(m, dict) and m.get("owner") == this
+ok = lambda i: isinstance(i, str) and re.fullmatch(r"[0-9a-fA-F-]+", i)
+here = lambda i: glob.glob(os.path.join(cdir, "projects", "*", i + ".jsonl"))
+for orig, fork in (d.items() if isinstance(d, dict) else []):
+    if not ok(orig) or (one and orig != one):
+        continue
+    if owned_here(orig):      # the authoritative copy: a link never trashes it
+        continue
+    if not ok(fork):
+        print("drop", orig, "-")
+    elif not here(orig):
+        print("drop", orig, fork)
+    elif here(fork):
+        print("trash", orig, fork)
+    else:
+        print("pending", orig, fork)
+PYEOF
+)
+fi
+PENDING=(); TRASHED=()
+in_list() { local x="$1" p; shift; for p in "$@"; do [ "$p" = "$x" ] && return 0; done; return 1; }
+shopt -s nullglob
+FILES=()
+for f in "$CLAUDE_DIR"/projects/*/*.jsonl; do
+  sid=$(basename "$f" .jsonl)
+  [[ "$sid" =~ ^[0-9a-fA-F-]+$ ]] || continue
+  [ -z "$ONE" ] || [ "$sid" = "$ONE" ] || continue
+  FILES+=("$f")
+done
+# One line per local copy owned elsewhere: <sid> <copies> <size> <sha256> <path>
+# (<copies>: how many project dirs hold this id here).
+PLAN=$(python3 - "$META" "$THIS" "${FILES[@]:-}" << 'PYEOF'
+import collections, json, os, sys
+meta_path, this, *files = sys.argv[1:]
+meta = json.load(open(meta_path))
+meta = meta if isinstance(meta, dict) else {}
+files = [f for f in files if f]
+sid_of = lambda f: os.path.basename(f)[:-len(".jsonl")]
+copies = collections.Counter(sid_of(f) for f in files)
+for f in files:
+    sid = sid_of(f)
+    m = meta.get(sid)
+    if not isinstance(m, dict):          # absent or malformed decision: not ours to settle
+        continue
+    owner = m.get("owner") or ""
+    if not isinstance(owner, str) or not owner or owner == this:
+        continue
+    fp = m.get("fingerprint")
+    fp = fp if isinstance(fp, dict) else {}
+    print(sid, copies[sid], fp.get("size", "-"), fp.get("sha256", "-"), f)
+PYEOF
+)
+# One supervisor read for every candidate and every unsaved fork;
+# unreadable → settle nothing (fail closed).
+STATES=""; SUP_OK=1
+CANDIDATES=$( { printf '%s\n' "$PLAN" | awk 'NF {print $1}'; printf '%s\n' "$LINKS" | awk '$1 == "pending" {print $3}'; } | sort -u)
+if [ -n "$CANDIDATES" ]; then
+  # shellcheck disable=SC2086  # ids are validated hex/dash
+  if [ "$(printf '%s\n' "$CANDIDATES" | wc -l)" -eq 1 ]; then
+    st=$(session-agents-state $CANDIDATES </dev/null) && STATES="$CANDIDATES $st" || SUP_OK=""
+  else
+    STATES=$(session-agents-state $CANDIDATES </dev/null) || SUP_OK=""
+  fi
+fi
+state_of() { printf '%s\n' "$STATES" | awk -v s="$1" '$1 == s {print $2; exit}'; }
+# Kept-both links (session-diverge g): fork saved → original to the trash;
+# fork unknown to the supervisor and never saved (dead) → link dropped, the
+# original waits as diverged; otherwise the original waits, flagged.
+DROP=()
+while read -r act orig fork; do
+  case "$act" in
+    drop) DROP+=("$orig") ;;
+    trash)
+      if session-trash "$orig" >/dev/null </dev/null; then DROP+=("$orig"); TRASHED+=("$orig")
+      else PENDING+=("$orig"); fi ;;
+    pending)
+      PENDING+=("$orig")
+      [ -z "$SUP_OK" ] || [ "$(state_of "$fork")" != unknown ] || DROP+=("$orig") ;;
+  esac
+done <<< "$LINKS"
+if [ ${#DROP[@]} -gt 0 ]; then
+  python3 - "$FORKS" "${DROP[@]}" << 'PYEOF'
+import json, os, sys, tempfile
+path, *drop = sys.argv[1:]
+try:
+  d = json.load(open(path))
+  d = d if isinstance(d, dict) else {}
+except (OSError, ValueError):
+  d = {}
+for i in drop:
+  d.pop(i, None)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+  json.dump(d, fh, indent=2, sort_keys=True)
+os.replace(tmp, path)
+PYEOF
+fi
+NEW_DIV=(); KEEP=()
+while read -r sid n size sha f; do
+  [ -n "$sid" ] || continue
+  ! in_list "$sid" "${TRASHED[@]:-}" || continue      # settled by its fork above
+  if [ -z "$SUP_OK" ]; then
+    KEEP+=("$sid"); echo "session-reconcile: état de ${sid:0:8} illisible — laissée en l'état" >&2; continue
+  fi
+  [ "$(state_of "$sid")" != running ] || { KEEP+=("$sid"); continue; }
+  # Kept both, fork not saved yet: the original waits, flagged.
+  ! in_list "$sid" "${PENDING[@]:-}" || { NEW_DIV+=("$sid"); continue; }
+  # The same id under two project dirs: never guess which one to trash.
+  [ "$n" -eq 1 ] || { NEW_DIV+=("$sid"); continue; }
+  cur=$(session-fingerprint "$f" </dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["size"],d["sha256"])') || continue
+  if [ "$size" != "-" ] && [ "$cur" = "$size $sha" ]; then
+    session-trash "$sid" >/dev/null </dev/null || KEEP+=("$sid")   # refused: leave it as it was
+  else
+    NEW_DIV+=("$sid")
+  fi
+done <<< "$PLAN"
+# Rewrite the diverged list: ids settled this run take their new state,
+# ids that could not be settled (KEEP) keep their previous one.
+python3 - "$DIV" "$ONE" "${KEEP[*]:-}" "${NEW_DIV[*]:-}" << 'PYEOF'
+import json, os, sys, tempfile
+path, one, keep, ids = sys.argv[1:]
+keep, ids = set(keep.split()), set(ids.split())
+try:
+    prev = set(json.load(open(path)))
+except (OSError, ValueError, TypeError):
+    prev = set()
+if one:                       # single-id run: only that id may change
+    out = (prev - {one}) | ids | (prev & keep)
+else:
+    out = ids | (prev & keep)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+    json.dump(sorted(out), fh)
+os.replace(tmp, path)
+PYEOF
+# Purge: only direct children of the trash that are day directories (YYYY-MM-DD).
+TRASH="$CLAUDE_DIR/session-trash"
+if [ -z "$ONE" ] && [ -d "$TRASH" ] && [ ! -L "$TRASH" ]; then
+  find "$TRASH" -mindepth 1 -maxdepth 1 -type d \
+    -name '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' -mtime +30 -exec rm -rf {} +
+fi

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# session-subject-roots — "name<TAB>resolved-root" for every cc subject on this
+# machine. Reads the subjects file (CC_DIRS) shared with cc and the .zshrc;
+# roots are resolved (:A) because Claude Code records real paths.
+set -euo pipefail
+F=$(session-config subjects_file 2>/dev/null || echo "$HOME/projects/admin/cc/subjects.zsh")
+[ -r "$F" ] || exit 0
+zsh -fc 'source "$1"; for k v in ${(kv)CC_DIRS}; do print -r -- "$k"$'"'"'\t'"'"'"${v:A}"; done' _ "$F"

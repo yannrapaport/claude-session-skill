@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# session-rows — the session list as "id<TAB>display" lines for fzf.
+# State (all optional) in $SESSIONS_STATE/:
+#   sort     activity | project | priority      (default activity)
+#   scope    subject | all                      (default all)
+#   subject  cc subject used when scope=subject
+#   filter   "" | prio | mac | nexus
+# Display: priority · age · owner (m/n) + markers · subject · title
+#   ● running here   ⇢ replica older than the source's last activity   ⚠ diverged
+set -euo pipefail
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
+VIEW=$(mktemp); META=$(mktemp); AG=$(mktemp)
+trap 'rm -f "$VIEW" "$META" "$AG"' EXIT
+session-index-view > "$VIEW"
+session-metastore all > "$META"
+# Display only: if agents lookup fails, show no running markers and keep listing.
+"$CLAUDE" agents --json --all > "$AG" 2>/dev/null || echo '[]' > "$AG"
+python3 - "$VIEW" "$META" "$AG" "${SESSIONS_STATE:-}" "$CLAUDE_DIR" << 'PYEOF'
+import json, os, signal, sys
+from datetime import datetime, timezone
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+view, meta, ag, state, claude_dir = sys.argv[1:6]
+rows = json.load(open(view))
+meta = json.load(open(meta))
+try:
+    agents = json.load(open(ag))
+    if isinstance(agents, dict):
+        agents = agents.get("sessions")
+    if not isinstance(agents, list):
+        agents = []
+except ValueError:
+    agents = []
+running = {a.get("sessionId") for a in agents
+           if isinstance(a, dict) and ("pid" in a or a.get("status"))}
+
+def st(name, default=""):
+    if not state:
+        return default
+    try:
+        return open(os.path.join(state, name)).read().strip() or default
+    except OSError:
+        return default
+
+sort, scope = st("sort", "activity"), st("scope", "all")
+subject, filt = st("subject"), st("filter")
+RANK = {"must": 0, "should": 1, "may": 2}
+BADGE = {"must": "!!", "should": "! ", "may": "· "}
+
+for r in rows:
+    m = meta.get(r["id"], {})
+    r["owner"] = m.get("owner") or r.get("machine", "?")
+    r["priority"] = m.get("priority", "")
+    r["last_activity"] = r.get("last_activity") or ""
+    r["proj"] = r.get("cc_subject") or (r.get("project_relative") or "~").split("/")[-1]
+    rel = r.get("cc_rel") or ""
+    if r.get("cc_subject") and rel and not rel.startswith("."):
+        r["proj"] += "/" + rel.split("/")[0]
+    r["proj"] = " ".join(str(r["proj"]).split())   # one line, no TAB/newline
+
+if scope == "subject" and subject:
+    rows = [r for r in rows if r.get("cc_subject") == subject]
+if filt == "prio":
+    rows = [r for r in rows if r["priority"]]
+elif filt in ("mac", "nexus"):
+    rows = [r for r in rows if r["owner"] == filt]
+
+rows.sort(key=lambda r: r["last_activity"], reverse=True)   # stable base
+if sort == "project":
+    rows.sort(key=lambda r: r["proj"])
+elif sort == "priority":
+    rows.sort(key=lambda r: RANK.get(r["priority"], 3))
+
+def parse(iso):
+    """ISO string -> aware datetime (naive = UTC); None if unparsable."""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+def age(iso):
+    dt = parse(iso)
+    if dt is None:
+        return "?"
+    s = (datetime.now(timezone.utc) - dt).total_seconds()
+    for unit, n in (("j", 86400), ("h", 3600), ("m", 60)):
+        if s >= n:
+            return f"{int(s // n)}{unit}"
+    return "0m"
+
+def replica_lag(r):
+    src = os.path.join(claude_dir, "session-replica", r.get("machine", ""), r["id"], "source.json")
+    try:
+        data = json.load(open(src))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    rep, act = parse(data.get("replicated_at")), parse(r["last_activity"])
+    return rep is not None and act is not None and rep < act
+
+for r in rows:
+    marks = ""
+    if r["id"] in running:
+        marks += "●"
+    if r["owner"] != r.get("machine") or replica_lag(r):
+        marks += "⇢"
+    if r.get("diverged"):
+        marks += "⚠"
+    title = " ".join(str(r.get("title") or r.get("subject") or "—").split())
+    # Markers right after the owner initial (fixed 3 cols) so a narrow pane never clips them.
+    line = (f"{BADGE.get(r['priority'], '  ')} {age(r['last_activity']):>4} "
+            f"{r['owner'][:1]}{marks:<3} {r['proj'][:12]:<12} {title}").rstrip()
+    print(f"{r['id']}\t{line}")
+PYEOF

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # session-index-view — print merged session list as a JSON array, newest first.
-# One row per session-id (deduped across machines, keeping the most-recently-active).
+# One row per session-id (deduped across machines, keeping the most-recently-active;
+# on equal activity, the copy on the owner recorded in meta/<id>.json).
 # Each row: {id, machine, project_relative, cwd, last_activity, subject, status, also_on:[...]}.
 # Respects HUB_DIR_OVERRIDE. Filters: --project <rel-substr> (substring), --machine <m> (exact), --active.
 set -euo pipefail
@@ -31,12 +32,28 @@ try:
         data = json.load(f)
 except json.JSONDecodeError as e:
     print(f"error: malformed registry: {e}", file=sys.stderr); sys.exit(1)
+meta_dir = os.path.join(os.path.dirname(registry), "meta")
+owners = {}
+def owner(sid):
+    if sid not in owners:
+        try:
+            m = json.load(open(os.path.join(meta_dir, sid + ".json")))
+            owners[sid] = m.get("owner") if isinstance(m, dict) else None
+        except (OSError, ValueError):
+            owners[sid] = None
+    return owners[sid]
+def wins(row, cur):
+    a, b = row.get("last_activity") or "", cur.get("last_activity") or ""
+    if a != b:
+        return a > b
+    # Same activity (a migrated copy keeps its mtime): the owner's copy is shown.
+    return row["machine"] == owner(row["id"]) != cur["machine"]
 best = {}
 for machine, sessions in data.get("machines", {}).items():
     for sid, e in sessions.items():
         row = dict(e); row["id"] = sid; row["machine"] = machine
         cur = best.get(sid)
-        if cur is None or row.get("last_activity","") > cur.get("last_activity",""):
+        if cur is None or wins(row, cur):
             also = set(cur.get("also_on", [])) if cur else set()
             if cur: also.add(cur["machine"])
             row["also_on"] = sorted(also)

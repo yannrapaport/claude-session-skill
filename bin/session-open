@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# session-open <session-id> — open a session that lives on this machine, in
+# this terminal.
+#   known to the supervisor (running or stopped) → claude attach
+#   never backgrounded → revive it in its own cwd with --resume --bg, then attach
+# `--resume --bg` on a session the supervisor already knows starts a COPY under
+# a new id (verified 2026-10-08), hence the state check first.
+set -euo pipefail
+SID="${1:?usage: session-open <session-id>}"
+[[ "$SID" =~ ^[0-9a-fA-F-]+$ ]] || { echo "session-open: identifiant invalide « $SID »" >&2; exit 1; }
+SHORT="${SID:0:8}"
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
+ST=$(session-agents-state "$SID" 2>/dev/null) || { echo "session-open: superviseur Claude injoignable — rien n'est relancé" >&2; exit 1; }
+case "$ST" in
+  running|stopped) exec "$CLAUDE" attach "$SHORT" ;;
+esac
+shopt -s nullglob
+F=("$CLAUDE_DIR"/projects/*/"$SID".jsonl)
+[ ${#F[@]} -gt 0 ] || { echo "session-open: $SHORT n'est pas sur cette machine" >&2; exit 1; }
+# A migrated session still records the source machine's cwd: session-cwd
+# prefers the override session-migrate leaves here.
+CWD=$(session-cwd "${F[0]}")
+[ -n "$CWD" ] && [ -d "$CWD" ] || { echo "session-open: répertoire de $SHORT introuvable ($CWD)" >&2; exit 1; }
+(cd "$CWD" && "$CLAUDE" --resume "$SID" --bg >/dev/null)
+exec "$CLAUDE" attach "$SHORT"

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# session-cwd <jsonl-path> — where this session lives on THIS machine.
+#   $CLAUDE_DIR/session-cwd-override/<id> when present (written by
+#   session-migrate: the transcript still records the source machine's cwd)
+#   else the transcript's first cwd (session-jsonl-cwd); empty when none.
+set -euo pipefail
+F="${1:-}"
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+SID=$(basename "$F" .jsonl)
+O="$CLAUDE_DIR/session-cwd-override/$SID"
+if [[ "$SID" =~ ^[0-9a-fA-F-]+$ ]] && [ -s "$O" ]; then
+  head -n 1 "$O"; exit 0
+fi
+session-jsonl-cwd "$F"

@@ -1,6 +1,6 @@
 ---
 name: resume
-description: Resume any session from the index on this machine — pulls the JSONL over ssh if it lives on another machine, then claude --resume.
+description: Resume any session from the index — migrates it here if it lives on the other machine, then opens it (attach, or revive then attach).
 argument-hint: "[row-number-or-id]"
 allowed-tools:
   - Bash
@@ -9,12 +9,13 @@ allowed-tools:
 
 # session:resume
 
-Resume a session from the global index. If the transcript already lives on this
-machine, resume directly. If it lives on another machine, pull it over ssh first.
+Resume a session from the global index: resolve the row, migrate the session
+here (`session-migrate` handles the copy, the replica fallback when the other
+machine sleeps, and the hub record), then open it.
 
 ## Prerequisites
 - `~/.claude/session-migrate.yml` has `machine`, `home`, and `peer_<other-machine>`
-  ssh targets configured.
+  configured.
 - `bin/` helpers are on `$PATH`.
 
 ## Usage
@@ -43,54 +44,32 @@ ambiguous one, and says which — show `sessions` again and stop rather than
 guessing. A row number needs a prior listing in this hub; if it reports there
 is none, run `sessions` first and ask the user to re-pick.
 
-### 2. Look up the session
-```bash
-INFO=$(session-registry-get "$SID")
-[ "$INFO" = "{}" ] && { echo "Unknown session id."; exit 1; }
-OWNER=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin)['machine'])")
-PROJECT_RELATIVE=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin)['project_relative'])")
-REMOTE_CWD=$(echo "$INFO" | python3 -c "import json,sys;print(json.load(sys.stdin).get('cwd',''))")
-# Build this machine's project path. If we own the session, its cwd IS local — use it directly.
-if [ "$OWNER" = "$THIS" ] && [ -n "$REMOTE_CWD" ]; then
-  PROJECT_PATH="$REMOTE_CWD"
-elif [ -z "$PROJECT_RELATIVE" ]; then
-  PROJECT_PATH="$HOME_DIR"
-else
-  PROJECT_PATH="$HOME_DIR/$PROJECT_RELATIVE"
-fi
-LOCAL_ENCODED=$(session-encode-path "$PROJECT_PATH")
-LOCAL_JSONL="$HOME_DIR/.claude/projects/$LOCAL_ENCODED/$SID.jsonl"
-```
-
-### 3. Ensure the JSONL is local
-If `$LOCAL_JSONL` already exists, skip to step 4. Otherwise pull it from the owner:
-```bash
-PEER=$(session-config "peer_$OWNER")
-# Remote path: encode the owner's absolute cwd; fall back to project_relative if cwd is blank (legacy).
-if [ -n "$REMOTE_CWD" ]; then
-  REMOTE_ENCODED=$(session-encode-path "$REMOTE_CWD")
-else
-  REMOTE_ENCODED=$(ssh "$PEER" "ls -d .claude/projects/*$PROJECT_RELATIVE* 2>/dev/null | head -1 | xargs basename")
-fi
-mkdir -p "$HOME_DIR/.claude/projects/$LOCAL_ENCODED"
-rsync -az "$PEER:.claude/projects/$REMOTE_ENCODED/$SID.jsonl" "$LOCAL_JSONL"
-```
-If rsync fails: "Could not reach $OWNER ($PEER). It must be up and on the network to resume a session that lives there." Then stop.
-
-### 4. Pull the project repo
-```bash
-git -C "$PROJECT_PATH" pull --ff-only 2>&1 | tail -1 || echo "git pull skipped/failed — project may be stale."
-```
-
-### 5. Show the latest checkpoint, if any
+### 2. Show the latest checkpoint, if any
 Checkpoints now live in the ai-brain vault (semantic) — point the user at them
 rather than auto-loading: tell them they can run `/ai-brain:restore` for the
 matching project if they want the work summary. Do not block resume on this.
 
-### 6. Launch
+### 3. Migrate it here
 ```bash
-cd "$PROJECT_PATH"
-claude --resume "$SID"
+session-migrate "$SID"    # no-op (exit 0) for a session already on this machine
 ```
-The next scheduled index scan on this machine will record the session locally;
-no manual registry update is needed.
+From the Bash tool there is no terminal, so `session-migrate` cannot ask its
+own questions. When it needs a confirmation it stops (exit 1) and prints
+« confirmation requise … » with the question — e.g. the other machine is
+asleep and the copy would come from the replica (its age is shown), or the
+session is running over there and would be stopped. Then:
+1. Relay the question to the user in chat, with the details it printed
+   (replica date and last known activity, or that the source will be stopped).
+2. Only once they agree, re-run with `--yes`:
+   ```bash
+   session-migrate "$SID" --yes
+   ```
+   If they decline, stop there — nothing was copied or stopped.
+Any other failure message (hub busy, directory missing here…): show it as is
+and stop.
+
+### 4. Open it
+A skill cannot switch the running session. `session-open "$SID"` (attach, or
+revive in its own cwd, then attach) replaces the terminal it runs in, so do
+not run it from the Bash tool; once migrated, hand it to the session layout: tell the user to pick the session in `sessions`
+(or `cc tmux <subject>`), where the main pane opens it in place.

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# session-target-cwd <cc-subject> <rel> <project-relative>
+# Where a session coming from another machine lands on this one:
+#   1. subject root here + rel, when that directory exists
+#   2. the subject root (rel was e.g. a worktree that only exists over there)
+#   3. no subject: this home + project-relative
+# Exit 3 with a message when the result does not exist here — never guess.
+set -euo pipefail
+SUBJ="${1:-}"; REL="${2:-}"; PREL="${3:-}"
+if [ -n "$SUBJ" ]; then
+  ROOT=$(session-subject-roots | awk -F'\t' -v s="$SUBJ" '$1==s{print $2}')
+  [ -n "$ROOT" ] || { echo "sujet « $SUBJ » inconnu sur cette machine" >&2; exit 3; }
+  if [ -n "$REL" ] && [ -d "$ROOT/$REL" ]; then echo "$ROOT/$REL"; exit 0; fi
+  [ -d "$ROOT" ] && { echo "$ROOT"; exit 0; }
+  echo "racine du sujet absente ici : $ROOT" >&2; exit 3
+fi
+T="$(session-config home)${PREL:+/$PREL}"
+[ -d "$T" ] || { echo "répertoire absent ici : $T" >&2; exit 3; }
+echo "$T"

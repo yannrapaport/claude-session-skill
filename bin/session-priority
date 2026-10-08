@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# session-priority <session-id> must|should|may|none — set a session's
+# priority (the todo convention) and push it to the hub.
+# Holds the hub lock across sync + write + push (SESSION_HUB_LOCKED=1 tells
+# session-hub-sync/-push it is held); hub busy → exit 1, nothing written.
+# A failed push is tolerated: the commit leaves with the next scan's push.
+set -euo pipefail
+SID="${1:?usage: session-priority <id> must|should|may|none}"
+P="${2:-}"
+[[ "$SID" =~ ^[0-9a-fA-F-]+$ ]] || { echo "session-priority: identifiant invalide « $SID »" >&2; exit 1; }
+case "$P" in
+  must|should|may) V="\"$P\"" ;;
+  none)            V=null ;;
+  *) echo "session-priority: niveau attendu must|should|may|none" >&2; exit 2 ;;
+esac
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+if [ -z "${SESSION_HUB_LOCKED:-}" ] && [ -d "$HUB_DIR" ]; then
+  TOKEN=$(session-hub-lock acquire) || { echo "session-priority: hub occupé — priorité non enregistrée" >&2; exit 1; }
+  trap 'session-hub-lock release "$TOKEN"' EXIT
+  export SESSION_HUB_LOCKED=1
+fi
+session-hub-sync >/dev/null 2>&1 || true
+session-metastore set "$SID" priority "$V"
+session-hub-push "prio: ${SID:0:8} $P" >/dev/null 2>&1 || true

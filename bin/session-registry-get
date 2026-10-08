@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Usage: session-registry-get <session-id>
+# Usage: session-registry-get [--machine <m>] <session-id>
 # Searches machines.*.<sid>; prints the entry with an added "machine" field,
 # or "{}" if not found. If present on >1 machine, returns the most-recently-active.
+# --machine <m>: that machine's own entry only (per-machine facts such as
+# `diverged` must never be read from another machine's copy).
 # Respects HUB_DIR_OVERRIDE.
 set -euo pipefail
-SID="$1"
+ONLY=""
+if [ "${1:-}" = --machine ]; then ONLY="${2:?usage: session-registry-get [--machine <m>] <session-id>}"; shift 2; fi
+SID="${1:?usage: session-registry-get [--machine <m>] <session-id>}"
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 REGISTRY="$HUB_DIR/registry.json"
-python3 - "$SID" "$REGISTRY" << 'PYEOF'
+python3 - "$SID" "$REGISTRY" "$ONLY" << 'PYEOF'
 import json, sys, os
-sid, path = sys.argv[1], sys.argv[2]
+sid, path, only = sys.argv[1:4]
 if not os.path.exists(path):
     print("{}"); sys.exit(0)
 try:
@@ -18,10 +22,12 @@ except Exception:
     print("{}"); sys.exit(0)
 hits = []
 for machine, sessions in data.get("machines", {}).items():
-    if sid in sessions:
+    if only and machine != only:
+        continue
+    if isinstance(sessions, dict) and isinstance(sessions.get(sid), dict):
         e = dict(sessions[sid]); e["machine"] = machine; hits.append(e)
 if not hits:
     print("{}"); sys.exit(0)
-hits.sort(key=lambda e: e.get("last_activity", ""), reverse=True)
+hits.sort(key=lambda e: e.get("last_activity") or "", reverse=True)
 print(json.dumps(hits[0]))
 PYEOF

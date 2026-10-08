@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# session-hub-lock acquire | release <token> — mutual exclusion for everything
+# that writes the local hub clone (session-hub-sync's pull, session-hub-push,
+# session-priority, session-migrate). mkdir-based: no flock on macOS.
+#   acquire          wait up to $SESSION_LOCK_WAIT seconds (default 30) for
+#                    $HUB_DIR/.lock; prints the owner token to pass to release.
+#                    Exit 1 with a message when still held (at once when the
+#                    hub dir doesn't exist). A lock older than 10 min is stale
+#                    (its holder died) and is taken over. Takeovers are
+#                    serialized by a second mutex, $HUB_DIR/.lock.takeover
+#                    (mkdir): whoever holds it re-checks that .lock is still
+#                    older than 10 min AND still carries the owner token read
+#                    when it was judged stale, and only then removes it and
+#                    creates its own. Anything else (a fresh lock replaced the
+#                    stale one, someone else is taking over) counts as busy.
+#                    A .lock.takeover older than 2 min is an abandoned takeover
+#                    (its taker died): rmdir'd — it is always empty — and retried.
+#                    No rename, no put-back: a fresh lock is never moved,
+#                    nested or stolen.
+#   release <token>  remove the lock only if it still carries that token.
+# A holder that runs other hub tools exports SESSION_HUB_LOCKED=1 for them:
+# session-hub-sync and session-hub-push then skip acquisition (no deadlock).
+# .lock* (.lock, .lock.takeover) is listed in the clone's .git/info/exclude:
+# never staged, and nothing tracked is added that the other machine's push
+# could conflict on.
+set -euo pipefail
+HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
+L="$HUB_DIR/.lock"
+T="$L.takeover"
+# stale <dir> <minutes>: true when <dir> exists and is older than <minutes>.
+stale() { [ -n "$(find "$1" -maxdepth 0 -mmin "+$2" 2>/dev/null)" ]; }
+owner_of() { cat "$1/owner" 2>/dev/null || true; }
+case "${1:-}" in
+  acquire)
+    [ -d "$HUB_DIR" ] || { echo "hub absent : $HUB_DIR" >&2; exit 1; }   # no point waiting
+    EX=$(git -C "$HUB_DIR" rev-parse --git-path info/exclude 2>/dev/null) || EX=""
+    if [ -n "$EX" ]; then
+      case "$EX" in /*) ;; *) EX="$HUB_DIR/$EX" ;; esac
+      grep -qxF '/.lock*' "$EX" 2>/dev/null || { mkdir -p "$(dirname "$EX")"; echo '/.lock*' >> "$EX"; }
+    fi
+    TOKEN="pid=$PPID host=$(hostname) rnd=$RANDOM$RANDOM"
+    WAIT=${SESSION_LOCK_WAIT:-30}; i=0
+    while :; do
+      mkdir "$L" 2>/dev/null && break
+      SEEN=$(owner_of "$L")               # identity first, then the age: a swap
+      if stale "$L" 10; then              # after this point shows as fresh or as a new token
+        # Test knob: a fresh lock replaces the stale one right after the decision.
+        if [ -n "${SESSION_LOCK_TEST_SWAP:-}" ]; then
+          rm -rf "$L"; mkdir "$L"; printf '%s\n' "$SESSION_LOCK_TEST_SWAP" > "$L/owner"
+        fi
+        if mkdir "$T" 2>/dev/null; then                    # one taker at a time
+          if stale "$L" 10 && [ "$(owner_of "$L")" = "$SEEN" ]; then
+            rm -rf "$L"
+            # Test knob: a third party re-creates the lock while we are taking over.
+            if [ -n "${SESSION_LOCK_TEST_RECREATE:-}" ]; then
+              mkdir "$L"; printf '%s\n' "$SESSION_LOCK_TEST_RECREATE" > "$L/owner"
+            fi
+            if mkdir "$L" 2>/dev/null; then rmdir "$T"; break; fi
+          fi
+          rmdir "$T"                                       # not ours to take: stay busy
+        elif stale "$T" 2; then
+          rmdir "$T" 2>/dev/null || true                   # abandoned takeover (always empty)
+        fi
+      fi
+      i=$((i + 1))
+      [ "$i" -lt $((WAIT * 2)) ] || { echo "hub verrouillé par une autre opération ($L) — réessaie plus tard" >&2; exit 1; }
+      sleep 0.5
+    done
+    printf '%s\n' "$TOKEN" > "$L/owner"
+    printf '%s\n' "$TOKEN" ;;
+  release)
+    TOKEN="${2:?usage: session-hub-lock release <token>}"
+    [ "$(cat "$L/owner" 2>/dev/null)" = "$TOKEN" ] || exit 0   # not ours (any more)
+    rm -f "$L/owner"; rmdir "$L" 2>/dev/null || true ;;
+  *) echo "usage: session-hub-lock acquire | release <token>" >&2; exit 1 ;;
+esac

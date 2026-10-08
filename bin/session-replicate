@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# session-replicate [<session-id>] — push this machine's interactive sessions
+# to the replica on `replica_to` (Mac → Nexus), so a migration can still be made
+# from there while this machine sleeps.
+#   <id>   that session only (the Stop hook — fast, no hub sync)
+#   none   every owned interactive session changed since its last replication,
+#          then prune replicas of sessions that left without migrating
+# Silent no-op when replica_to is unset (Nexus) or the peer does not answer.
+set -euo pipefail
+TO=$(session-config replica_to 2>/dev/null) || exit 0
+PEER=$(session-config "peer_$TO")
+THIS=$(session-config machine)
+HOME_DIR=$(session-config home)
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+STATE="$CLAUDE_DIR/session-replica-state.json"
+ONE="${1:-}"
+ssh -n -o ConnectTimeout=3 -o BatchMode=yes "$PEER" true 2>/dev/null || exit 0
+[ -n "$ONE" ] || session-hub-sync >/dev/null 2>&1 || true
+
+# -n: none of these ssh calls reads stdin (the prune loop reads a listing on it).
+SSH_OPTS=(-n -o ConnectTimeout=5 -o BatchMode=yes)
+RSH="ssh -o ConnectTimeout=5 -o BatchMode=yes"
+valid_id() { [[ "$1" =~ ^[0-9a-fA-F-]+$ ]]; }
+if [ -n "$ONE" ] && ! valid_id "$ONE"; then echo "session-replicate: invalid id '$ONE'" >&2; exit 0; fi
+
+state_get() { python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))
+except Exception: print("")' "$STATE" "$1"; }
+state_set() { python3 -c 'import json,os,sys,tempfile
+p=sys.argv[1]
+try: d=json.load(open(p))
+except Exception: d={}
+d[sys.argv[2]]=sys.argv[3]
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p) or ".", suffix=".tmp")
+with os.fdopen(fd,"w") as fh: json.dump(d, fh)
+os.replace(tmp, p)' "$STATE" "$1" "$2"; }
+
+# Returns non-zero on any failed step; state is only recorded after full success.
+replicate_one() {
+  local f="$1" sid; sid=$(basename "$f" .jsonl)
+  valid_id "$sid" || { echo "session-replicate: skipping invalid id '$sid'" >&2; return 0; }
+  local ep; ep=$(session-meta "$f" | cut -f1)
+  [ -z "$ep" ] || [ "$ep" = cli ] || return 0
+  local owner; owner=$(session-metastore get "$sid" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')
+  [ -z "$owner" ] || [ "$owner" = "$THIS" ] || return 0
+  local mt; mt=$(python3 -c 'import os,sys;print(int(os.path.getmtime(sys.argv[1])))' "$f")
+  [ -n "$ONE" ] || [ "$(state_get "$sid")" != "$mt" ] || return 0
+  local dst=".claude/session-replica/$THIS/$sid"
+  # source.json is built first so its size is the one measured before the copy.
+  local cwd sr title src
+  cwd=$(session-cwd "$f")
+  sr=$(session-subject-of "$cwd" || true)
+  title=$(session-meta "$f" | cut -f2)
+  src=$(mktemp)
+  python3 - "$cwd" "$HOME_DIR" "$sr" "$f" "$title" > "$src" << 'PYEOF' || { rm -f "$src"; return 1; }
+import json, os, sys
+from datetime import datetime, timezone
+cwd, home, sr, f, title = sys.argv[1:6]
+subj, _, rel = sr.partition("\t")
+prel = "" if cwd == home.rstrip("/") else cwd[len(home.rstrip("/")) + 1:] if cwd.startswith(home.rstrip("/") + "/") else cwd
+print(json.dumps({"cwd": cwd, "project_relative": prel, "cc_subject": subj, "cc_rel": rel,
+                  "title": title, "size": os.path.getsize(f),
+                  "replicated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}))
+PYEOF
+  local rc=0
+  {
+    ssh "${SSH_OPTS[@]}" "$PEER" "mkdir -p '$dst'" &&
+    rsync -a -e "$RSH" "$f" "$PEER:$dst/" &&
+    { [ ! -d "${f%.jsonl}" ] || rsync -a -e "$RSH" "${f%.jsonl}" "$PEER:$dst/"; } &&
+    { [ ! -d "$CLAUDE_DIR/file-history/$sid" ] || {
+        ssh "${SSH_OPTS[@]}" "$PEER" "mkdir -p '$dst/file-history'" &&
+        rsync -a -e "$RSH" "$CLAUDE_DIR/file-history/$sid/" "$PEER:$dst/file-history/"; }; } &&
+    rsync -a -e "$RSH" "$src" "$PEER:$dst/source.json"
+  } || rc=1
+  rm -f "$src"
+  [ "$rc" = 0 ] || return 1
+  state_set "$sid" "$mt"
+}
+
+shopt -s nullglob
+if [ -n "$ONE" ]; then
+  for f in "$CLAUDE_DIR"/projects/*/"$ONE".jsonl; do replicate_one "$f" || true; done
+  exit 0
+fi
+LOCAL=()
+for f in "$CLAUDE_DIR"/projects/*/*.jsonl; do
+  LOCAL+=("$(basename "$f" .jsonl)")
+  replicate_one "$f" || echo "session-replicate: $(basename "$f") failed" >&2
+done
+# Prune:
+#   - a replica of a session the replica host ($TO) now owns: it migrated there
+#     (from this replica, while this machine slept), and the Stop hook — which
+#     skips the hub sync — may have recreated it since
+#   - a replica of a session no longer here, unless another machine took it
+#     over (session-migrate removes that replica itself once the migration is
+#     pushed). Never when the local list looks broken (projects/ missing or empty).
+LOCAL_OK=""; [ -d "$CLAUDE_DIR/projects" ] && [ "${#LOCAL[@]}" -gt 0 ] && LOCAL_OK=1
+while IFS= read -r sid; do
+  valid_id "$sid" || continue
+  owner=$(session-metastore get "$sid" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("owner",""))')
+  if [ "$owner" != "$TO" ]; then
+    [ -n "$LOCAL_OK" ] || continue
+    case " ${LOCAL[*]} " in *" $sid "*) continue ;; esac
+    [ -z "$owner" ] || [ "$owner" = "$THIS" ] || continue
+  fi
+  ssh "${SSH_OPTS[@]}" "$PEER" "rm -rf '.claude/session-replica/$THIS/$sid'" || true
+done < <(ssh "${SSH_OPTS[@]}" "$PEER" "ls '.claude/session-replica/$THIS' 2>/dev/null" || true)
