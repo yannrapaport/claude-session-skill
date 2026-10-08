@@ -6,8 +6,11 @@
 #                    $HUB_DIR/.lock; prints the owner token to pass to release.
 #                    Exit 1 with a message when still held (at once when the
 #                    hub dir doesn't exist). A lock older than 10 min is stale
-#                    (its holder died) and is taken over: renamed away first,
-#                    so only one taker wins.
+#                    (its holder died) and is taken over: identified (inode +
+#                    owner token) when judged stale, renamed away (one taker
+#                    wins the rename), then re-identified — if what was renamed
+#                    is not that stale lock (a fresh one replaced it meanwhile)
+#                    it is put back and the lock counts as busy.
 #   release <token>  remove the lock only if it still carries that token.
 # A holder that runs other hub tools exports SESSION_HUB_LOCKED=1 for them:
 # session-hub-sync and session-hub-push then skip acquisition (no deadlock).
@@ -16,6 +19,8 @@
 set -euo pipefail
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 L="$HUB_DIR/.lock"
+# lock_id <dir>: "<inode> <owner token>" — what a lock is, independent of its mtime.
+lock_id() { local n; n=$(ls -di "$1" 2>/dev/null | awk '{print $1}') || return 0; [ -z "$n" ] || printf '%s %s' "$n" "$(cat "$1/owner" 2>/dev/null)"; }
 case "${1:-}" in
   acquire)
     [ -d "$HUB_DIR" ] || { echo "hub absent : $HUB_DIR" >&2; exit 1; }   # no point waiting
@@ -28,9 +33,19 @@ case "${1:-}" in
     WAIT=${SESSION_LOCK_WAIT:-30}; i=0
     until mkdir "$L" 2>/dev/null; do
       if [ -n "$(find "$L" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+        SEEN=$(lock_id "$L")
+        # Test knob: a fresh lock replaces the stale one right after the decision.
+        if [ -n "${SESSION_LOCK_TEST_SWAP:-}" ]; then
+          rm -rf "$L"; mkdir "$L"; printf '%s\n' "$SESSION_LOCK_TEST_SWAP" > "$L/owner"
+        fi
         S="$L.stale.$$"
-        if mv "$L" "$S" 2>/dev/null; then rm -rf "$S"; fi   # only one taker wins the rename
-        continue
+        if mv "$L" "$S" 2>/dev/null; then                  # one taker wins the rename
+          if [ -n "$SEEN" ] && [ "$(lock_id "$S")" = "$SEEN" ]; then
+            rm -rf "$S"; continue                          # it was the stale lock
+          fi
+          # Someone's fresh lock: give it back (unless already replaced), stay busy.
+          mv "$S" "$L" 2>/dev/null || rm -rf "$S"
+        fi
       fi
       i=$((i + 1))
       [ "$i" -lt $((WAIT * 2)) ] || { echo "hub verrouillé par une autre opération ($L) — réessaie plus tard" >&2; exit 1; }

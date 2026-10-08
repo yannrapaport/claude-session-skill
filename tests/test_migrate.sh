@@ -168,6 +168,14 @@ rc=0; on nexus env SESSION_LOCK_WAIT=1 session-hub-push "zz" >/dev/null 2>&1 || 
 assert_eq "stale lock: taken over" "0" "$rc"
 assert_eq "stale lock: released after push" "no" "$([ -e "$OH/.lock" ] && echo yes || echo no)"
 assert_eq "lock never tracked" "" "$(git -C "$OH" ls-files | grep -F .lock || true)"
+# Takeover race: a fresh lock replaces the stale one after the staleness decision
+# → the taker doesn't steal it (stays busy), the fresh lock keeps its token.
+mkdir "$OH/.lock"; echo "dead holder" > "$OH/.lock/owner"; touch -t 202001010000 "$OH/.lock"
+rc=0; on nexus env SESSION_LOCK_WAIT=1 SESSION_LOCK_TEST_SWAP="fresh holder" session-hub-lock acquire >/dev/null 2>&1 || rc=$?
+assert_eq "takeover race: taker refused" "1" "$rc"
+assert_eq "takeover race: fresh lock keeps its token" "fresh holder" "$(cat "$OH/.lock/owner" 2>/dev/null)"
+assert_eq "takeover race: no renamed leftovers" "" "$(ls -d "$OH"/.lock.stale.* 2>/dev/null || true)"
+rm -r "$OH/.lock"
 
 # Push reports a failure but reached the hub → the migration stands.
 REALGIT=$(command -v git)
