@@ -29,9 +29,9 @@ The row number is the handle — `/session:resume 3` takes the third row. Number
 `session-resolve` turns a row number, a full id, or a unique id prefix into a session id — refusing an out-of-range row, an unknown prefix, or an ambiguous one rather than guessing. Then it looks up the owning machine in the registry and resumes:
 
 - **Local session** — `claude --resume <id>` directly.
-- **Remote session** — rsync the JSONL over ssh from `peer_<machine>`, then `claude --resume <id>`.
+- **Remote session** — `session-migrate` moves it here (live source over ssh, or the replica when the source is asleep), then `session-open` opens it. See [Session manager](#session-manager).
 
-If the remote machine is unreachable, fails with a clear message (the machine must be up and on the network).
+If the remote machine is unreachable and no replica exists, fails with a clear message.
 
 ### 4. GC process (`session-gc-process`, hourly)
 
@@ -54,6 +54,36 @@ Deletes this machine's headless transcripts — the ones the indexer refuses. Dr
 session-purge-headless          # report only
 session-purge-headless --yes    # delete, then rescan
 ```
+
+---
+
+## Session manager
+
+`sessions` opens a two-pane tmux layout (`session-layout`): the fzf session list on the left, the chosen session on the right. Same tool on Mac and Nexus. Markers: `●` running, `⇢` replica behind its source, `⚠` diverged.
+
+| Key | Action |
+|-----|--------|
+| typing | fuzzy filter on the displayed line |
+| `Enter` | resume / migrate into the main pane; on `⚠`, resolution menu |
+| `ctrl-a` | current subject ↔ all sessions |
+| `ctrl-s` | sort: activity → project + activity → priority + activity |
+| `alt-p` / `alt-m` / `alt-n` | prioritized only / Mac / Nexus |
+| `alt-1` `alt-2` `alt-3` `alt-0` | priority must / should / may / none |
+| `ctrl-x` | trash (confirmation) |
+
+**Migration** (`session-migrate`) leaves a single live copy. Source reachable: the JSONL is pulled over ssh, the source copy goes to the trash. Source unreachable (Mac asleep, from Nexus): the replica kept by the Stop hook (`session-replicate`) is used instead; the stale source copy is trashed at its next scan.
+
+**Trash and divergence** — trashed sessions land in `~/.claude/session-trash/`. If a session was continued on both machines, `session-reconcile` flags it `⚠`; `g` in the resolution menu keeps both as separate sessions (`session-diverge`), the old one going to the trash.
+
+New config keys:
+
+| Key | Description |
+|-----|-------------|
+| `subjects_file` | zsh file defining `CC_DIRS` (subject → root), shared with `cc` |
+| `replica_to` | Mac only: peer that receives a replica of this machine's sessions; also wires the Stop hook |
+| `claude_bin` | Path to `claude` when it is not on the non-interactive `PATH` (Nexus) |
+
+`install.sh` also raises `cleanupPeriodDays` to at least 365 in `~/.claude/settings.json` (via `session-install-settings`) so Claude Code does not purge transcripts before the session tools do. Nexus needs fzf >= 0.50 in `~/.local/bin`.
 
 ---
 
@@ -97,6 +127,9 @@ Copy `config.yml.template` to `~/.claude/session-migrate.yml` and fill in your v
 | `machine` | Name of this machine (e.g. `mac`, `nexus`) | required |
 | `home` | Absolute home path on this machine | required |
 | `peer_<machine>` | ssh target for each **other** machine (anything `ssh` accepts: alias, `user@host`, Tailscale hostname) | one per peer |
+| `subjects_file` | zsh file defining `CC_DIRS` (shared with `cc`) | none |
+| `replica_to` | Mac only: peer receiving a replica; enables the Stop hook | none |
+| `claude_bin` | Path to `claude` if not on `PATH` | `claude` |
 | `gc_process_idle_hours` | Idle threshold (hours) before a detached `claude` process is killed | `6` |
 | `gc_archive_days` | Sessions inactive longer than this (days) are archived | `10` |
 | `gc_purge_days` | Delete archived JSONL after this many days (`0` = never) | `0` |

@@ -95,6 +95,12 @@ else
   echo "⚠  Could not auto-enable. Run manually:  claude plugin enable session@claude-session-skill"
 fi
 
+# ── 2c. Claude Code settings: retention + replication hook ───────────────────
+
+PATH="$BIN_DIR:$PATH" session-install-settings "$HOME/.claude/settings.json" \
+  "$INSTALL_DIR/hooks/stop-replicate" \
+  "$(grep -q '^replica_to:' "$CONFIG" 2>/dev/null && echo 1 || echo 0)"
+
 # ── 3. Add bin/ to PATH ───────────────────────────────────────────────────────
 
 PROFILE=""
