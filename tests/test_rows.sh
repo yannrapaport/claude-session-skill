@@ -8,6 +8,9 @@ cat > "$H/registry.json" <<'JSON'
 {"version": 2, "machines": {
  "mac":   {"0dd": {"cwd": "/x", "project_relative": "projects/tpg/rakam", "cc_subject": "tpg", "cc_rel": "rakam",
                    "last_activity": "2026-10-01T10:00:00Z", "title": "Vieux", "turns": 3, "status": "active"},
+           "mid": {"cwd": "/z", "project_relative": "projects/tpg", "cc_subject": "tpg", "cc_rel": "",
+                   "last_activity": "2026-10-04T10:00:00Z", "title": "Milieu", "turns": 5, "status": "active",
+                   "diverged": true},
            "new": {"cwd": "/y", "project_relative": "ai-brain", "cc_subject": "brain", "cc_rel": "",
                    "last_activity": "2026-10-08T10:00:00Z", "title": "Récent", "turns": 9, "status": "active"}},
  "nexus": {"mid": {"cwd": "/z", "project_relative": "projects/tpg", "cc_subject": "tpg", "cc_rel": "",
@@ -30,6 +33,21 @@ echo all > "$SESSIONS_STATE/scope"; echo nexus > "$SESSIONS_STATE/filter"
 assert_eq "filter: nexus" "mid " "$(on mac session-rows | ids)"
 echo prio > "$SESSIONS_STATE/filter"
 assert_eq "filter: prioritised" "0dd " "$(on mac session-rows | ids)"
+
+# --json: same rows/order as the text output, typed fields.
+echo activity > "$SESSIONS_STATE/sort"; : > "$SESSIONS_STATE/filter"
+JSON_OUT=$(on mac session-rows --json)
+assert_eq "json: exact keys" "['age', 'diverged', 'id', 'lag', 'last_activity', 'machine', 'owner', 'priority', 'proj', 'running', 'subject', 'title']" \
+  "$(printf '%s' "$JSON_OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted(d[0]))')"
+assert_eq "json: booleans" "True" \
+  "$(printf '%s' "$JSON_OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(all(isinstance(r[k], bool) for r in d for k in ("running","lag","diverged")))')"
+assert_eq "json: same order as text" "$(on mac session-rows | ids)" \
+  "$(printf '%s' "$JSON_OUT" | python3 -c 'import json,sys; print("".join(r["id"]+" " for r in json.load(sys.stdin)))')"
+assert_eq "json: diverged flag" "True" \
+  "$(printf '%s' "$JSON_OUT" | python3 -c 'import json,sys; print({r["id"]:r["diverged"] for r in json.load(sys.stdin)}["mid"])')"
+echo prio > "$SESSIONS_STATE/filter"
+assert_eq "json: honours filter" "0dd " \
+  "$(on mac session-rows --json | python3 -c 'import json,sys; print("".join(r["id"]+" " for r in json.load(sys.stdin)))')"
 
 # Character-based slicing (cut -c is byte-based in a C locale).
 cols() { python3 -c 'import sys; print(sys.argv[1][int(sys.argv[2])-1:int(sys.argv[3])])' "$1" "$2" "$3"; }

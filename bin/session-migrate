@@ -30,7 +30,7 @@ confirm() {
   [ "$YES" = --yes ] && return 0
   if [ ! -t 0 ]; then
     say "confirmation requise, mais pas de terminal pour la demander : « $1 »"
-    say "→ migration annulée. Relance avec --yes une fois d'accord (session-migrate $SID --yes), ou ouvre la session depuis la liste (sessions / cc tmux)."
+    say "→ migration annulée. Relance avec --yes une fois d'accord (session-migrate $SID --yes), ou ouvre la session depuis la liste (panneau Ctrl+Espace / cc <sujet>)."
     return 1
   fi
   local a=""; read -r -p "$1 [o/N] " a || true; [ "$a" = o ] || [ "$a" = O ]

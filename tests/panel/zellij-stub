@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# zellij stub: logs argv to $ZJ_LOG; serves list-panes/list-tabs from $ZJ_PANES/$ZJ_TABS (JSON files);
+# new-tab prints $ZJ_NEW_TAB_ID (default 7), new-pane terminal_$ZJ_NEW_PANE_ID.
+echo "$*" >> "${ZJ_LOG:?}"
+args=" $* "
+# ZJ_FAIL=<subcommand>: that subcommand fails (stderr + exit 1)
+if [ -n "${ZJ_FAIL:-}" ] && [[ "$args" == *" $ZJ_FAIL "* ]]; then echo "stub: $ZJ_FAIL failed" >&2; exit 1; fi
+case "$args" in
+  *" list-panes "*) cat "${ZJ_PANES:?}" ;;
+  *" list-tabs "*)  cat "${ZJ_TABS:?}" ;;
+  *" new-pane "*)   echo "terminal_${ZJ_NEW_PANE_ID:-9}" ;;
+  *" new-tab "*)    echo "${ZJ_NEW_TAB_ID-7}" ;;
+esac
+exit "${ZJ_RC:-0}"

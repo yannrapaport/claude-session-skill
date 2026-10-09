@@ -71,5 +71,5 @@ and stop.
 ### 4. Open it
 A skill cannot switch the running session. `session-open "$SID"` (attach, or
 revive in its own cwd, then attach) replaces the terminal it runs in, so do
-not run it from the Bash tool; once migrated, hand it to the session layout: tell the user to pick the session in `sessions`
-(or `cc tmux <subject>`), where the main pane opens it in place.
+not run it from the Bash tool; once migrated, hand it to the panel: tell the user to pick the session in `sessions`
+(or `cc <subject>`), where the panel opens it in its own Zellij tab.

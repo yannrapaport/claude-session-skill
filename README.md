@@ -59,17 +59,20 @@ session-purge-headless --yes    # delete, then rescan
 
 ## Session manager
 
-`sessions` opens a two-pane tmux layout (`session-layout`): the fzf session list on the left, the chosen session on the right. Same tool on Mac and Nexus. Markers: `●` running, `⇢` replica behind its source, `⚠` diverged.
+`sessions` (or `cc <subject>`) attaches to a Zellij session `cc-<subject>` (`cc-sessions` outside any subject), started in the subject root. `Ctrl+Space` (or `Alt+s` when the terminal sends Ctrl+Space as NUL) toggles the sessions panel: a pinned floating pane (36 columns, docked left, `session-panel`, Textual app). Each session opens in its own Zellij tab; the panel follows you across tabs. Same tool on Mac and Nexus. Markers: `●` open in a tab, `⇢` replica behind its source, `⚠` diverged.
 
 | Key | Action |
 |-----|--------|
-| typing | fuzzy filter on the displayed line |
-| `Enter` | resume / migrate into the main pane; on `⚠`, resolution menu |
-| `ctrl-a` | current subject ↔ all sessions |
-| `ctrl-s` | sort: activity → project + activity → priority + activity |
-| `alt-p` / `alt-m` / `alt-n` | prioritized only / Mac / Nexus |
-| `alt-1` `alt-2` `alt-3` `alt-0` | priority must / should / may / none |
-| `ctrl-x` | trash (confirmation) |
+| `Enter` | open the session in its tab (go to it if already open; migrate first when it lives on the other machine) |
+| `/` | filter |
+| `s` | cycle sort |
+| `r` | refresh |
+| `p` / `Ctrl+K` | command palette (not `Ctrl+P`: Zellij keeps it for pane mode): open any session, priority must / should / may / none, trash (twice to confirm), sort, filter, scope subject ↔ all, sync, replicate, favorite prompts |
+| `q` / `Ctrl+Space` | close the panel |
+
+Favorite prompts live in `${XDG_CONFIG_HOME:-~/.config}/session-panel/prompts.txt` (one per line; `install.sh` seeds it). The palette sends the chosen line to the session pane of the current tab.
+
+Requirements: `zellij` (Mac: `brew install zellij`; Nexus: binary in `~/.local/bin`) and `uv` (the launcher is a PEP 723 script with `textual` as dependency). `install.sh` installs `~/.config/zellij/config.kdl` only if none exists — an existing one without the panel keybind gets a warning and the block to paste — and warns when `zellij` or `uv` is missing. The panel refreshes every `SESSION_PANEL_REFRESH` seconds (default 30) without the costly `claude agents` read; `r` does a full refresh. `sessions --plain` (or a pipe) prints the table instead.
 
 **Migration** (`session-migrate`) leaves a single live copy. Source reachable: the JSONL is pulled over ssh, the source copy goes to the trash. Source unreachable (Mac asleep, from Nexus): the replica kept by the Stop hook (`session-replicate`) is used instead; the stale source copy is trashed at its next scan.
 
@@ -83,7 +86,7 @@ New config keys:
 | `replica_to` | Mac only: peer that receives a replica of this machine's sessions; also wires the Stop hook |
 | `claude_bin` | Absolute path to `claude` — set it on **both** machines: launchd (Mac) and cron (Nexus) run the scan with a minimal `PATH` that usually lacks `claude`, and without it every reconcile fails closed (nothing settled; `session-reconcile … illisible` in `/tmp/session-index.err` or `/tmp/session-index.log`) |
 
-`install.sh` also raises `cleanupPeriodDays` to at least 365 in `~/.claude/settings.json` (via `session-install-settings`) so Claude Code does not purge transcripts before the session tools do. Nexus needs fzf >= 0.50 in `~/.local/bin`.
+`install.sh` also raises `cleanupPeriodDays` to at least 365 in `~/.claude/settings.json` (via `session-install-settings`) so Claude Code does not purge transcripts before the session tools do.
 
 ### Mise à jour d'une installation existante
 
@@ -96,8 +99,9 @@ Dans cet ordre, sur les deux machines sauf mention contraire :
    - `replica_to: nexus` — **Mac uniquement** ;
    - `claude_bin: <chemin absolu de claude>` — les deux machines (`command -v claude` dans un shell interactif).
 4. Relancer `bash install.sh` sur les deux machines — **après** l'étape 3 : c'est lui qui branche le Stop hook à partir de `replica_to`.
-5. Nexus : installer fzf >= 0.50 dans `~/.local/bin`.
+5. Mac et Nexus : installer `zellij` et `uv` (Nexus : binaires dans `~/.local/bin`).
 6. cron (Nexus) et launchd (Mac) : rien à changer.
+7. Fermer les anciennes sessions tmux `cc-*` (`tmux kill-session -t cc-<sujet>`).
 
 ---
 

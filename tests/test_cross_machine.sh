@@ -38,6 +38,11 @@ assert_eq "C1: mac entry pruned"             "-"                     "$(reg nexu
 mkdir -p "$MTMP/st"; echo subject > "$MTMP/st/scope"; echo tpg > "$MTMP/st/subject"
 assert_eq "C1: listed under its subject" "1" \
   "$(on nexus env SESSIONS_STATE="$MTMP/st" session-rows | grep -c "^$R" || true)"
+# I5: SESSIONS_NO_AGENTS=1 (panel timer refresh) skips the `claude agents` call; default still makes it.
+: > "$MTMP/claude.log"; on nexus env SESSIONS_NO_AGENTS=1 session-rows --json >/dev/null 2>&1
+assert_eq "rows: SESSIONS_NO_AGENTS=1 skips claude agents" "0" "$(grep -c agents "$MTMP/claude.log" || true)"
+: > "$MTMP/claude.log"; on nexus session-rows --json >/dev/null 2>&1
+assert_eq "rows: default reads claude agents" "1" "$(grep -c agents "$MTMP/claude.log" || true)"
 # Round trip: back to the Mac, into its original directory.
 rc=0; out=$(on mac session-migrate "$R" --yes 2>&1) || rc=$?
 assert_eq "C1: nexus → mac migrates back" "0" "$rc"
@@ -61,13 +66,21 @@ PY
 assert_eq "C2: registry-get --machine" "nexus False" \
   "$(on nexus session-registry-get --machine nexus "$X" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["machine"],d["diverged"])')"
 assert_eq "C2: registry-get --machine absent" "{}" "$(on nexus session-registry-get --machine elsewhere "$X")"
-export SESSIONS_STATE="$MTMP/st"
-: > "$MTMP/tmux.log"
-on nexus session-tui-act open "$X"
-case "$(tail -1 "$MTMP/tmux.log")" in
-  *session-diverge*) r=diverge ;; *"session-open $X"*) r=open ;; *) r="$(tail -1 "$MTMP/tmux.log")" ;; esac
-assert_eq "C2: owner opens its own copy (not the diverge menu)" "open" "$r"
-unset SESSIONS_STATE
+# The panel's rows carry THIS machine's divergence, not the merged row's.
+cp "$N/.claude/session-hub/registry.json" "$M/.claude/session-hub/registry.json"
+_div() { on "$1" session-rows --json | python3 -c 'import json,sys;print([r["diverged"] for r in json.load(sys.stdin) if r["id"]==sys.argv[1]])' "$X"; }
+_cmd() { PYTHONPATH="$SCRIPT_DIR/.." python3 -c '
+import sys
+from pathlib import Path
+from panel.model import Session
+from panel.actions import Actions
+a = Actions(None, sys.argv[1], Path("/tmp"))
+print(a.command_for(Session(sys.argv[2], "nexus", "", "", "", "", "", "", "", False, False, sys.argv[3] == "True")))' "$1" "$X" "$2"; }
+assert_eq "C2: rows --json on the owner: not diverged" "[False]" "$(_div nexus)"
+assert_eq "C2: owner opens its own copy" "['session-open', '$X']" "$(_cmd nexus "$(_div nexus | tr -d '[]')")"
+assert_eq "C2: rows --json on mac: diverged" "[True]" "$(_div mac)"
+assert_eq "C2: mac's diverged copy → diverge menu" "['session-diverge', '$X']" "$(_cmd mac True)"
+git -C "$M/.claude/session-hub" checkout -q -- registry.json 2>/dev/null || true
 git -C "$N/.claude/session-hub" checkout -q -- registry.json   # drop the hand-made entries
 rc=0; echo c | on nexus session-diverge "$X" >/dev/null 2>&1 || rc=$?
 assert_eq "C2: diverge refused on the owner" "1" "$rc"
@@ -156,9 +169,6 @@ assert_eq "M1: open rejects a bad id" "1" "$rc"
 rc=0; on mac session-priority "../x" must >/dev/null 2>&1 || rc=$?
 assert_eq "M1: priority rejects a bad id" "1" "$rc"
 assert_eq "M1: priority wrote nothing" "no" "$(yn test -e "$M/.claude/session-hub/x.json")"
-: > "$MTMP/tmux.log"
-rc=0; on mac env SESSIONS_STATE="$MTMP/st" session-tui-act open "../x" >/dev/null 2>&1 || rc=$?
-assert_eq "M1: tui-act rejects a bad id" "1 0" "$rc $(grep -c respawn-pane "$MTMP/tmux.log" || true)"
 rc=0; on mac session-metastore set "../evil" owner '"x"' >/dev/null 2>&1 || rc=$?
 assert_eq "M1: metastore set rejects a bad id" "1 no" "$rc $(yn test -e "$M/.claude/session-hub/evil.json")"
 rc=0; on mac session-metastore get "a/b" >/dev/null 2>&1 || rc=$?

@@ -6,13 +6,19 @@
 # `/session:resume 3` can name the third row without anyone reading a uuid.
 # The numbers describe the last listing only — re-running `sessions` renumbers.
 set -euo pipefail
-# Interactive terminal → the two-pane layout. --plain, or a pipe (the
-# /session:list skill runs us from Bash), keeps the table below.
+# Interactive terminal → the Zellij session (panel on Ctrl+Space). --plain, or a
+# pipe (the /session:list skill runs us from Bash), keeps the table below.
 if [ "${1:-}" = --plain ]; then
   shift
-elif [ -t 1 ] && command -v tmux >/dev/null && command -v fzf >/dev/null; then
+elif [ -t 1 ] && [ -n "${ZELLIJ:-}" ]; then
+  # Checked before looking for zellij itself; a pipe/--plain (the table) is unaffected.
+  echo "Déjà dans Zellij — détache d'abord (Ctrl+O puis d) ou change de session avec Ctrl+O puis w." >&2
+  exit 1
+elif [ -t 1 ] && command -v zellij >/dev/null; then
   SUBJ=$(session-subject-of "$PWD" | cut -f1 || true)
-  exec session-layout "cc-${SUBJ:-sessions}" "$SUBJ"
+  ROOT=$(session-subject-roots 2>/dev/null | awk -F'\t' -v s="$SUBJ" 's != "" && $1 == s {print $2; exit}' || true)
+  [ -n "$ROOT" ] && [ -d "$ROOT" ] && cd "$ROOT"
+  exec zellij attach -c "cc-${SUBJ:-sessions}"
 fi
 session-hub-sync >/dev/null 2>&1 || true
 THIS=$(session-config machine 2>/dev/null || echo "")

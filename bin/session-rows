@@ -1,27 +1,45 @@
 #!/usr/bin/env bash
-# session-rows — the session list as "id<TAB>display" lines for fzf.
+# session-rows — the session list as "id<TAB>display" lines (or --json for the panel).
 # State (all optional) in $SESSIONS_STATE/:
 #   sort     activity | project | priority      (default activity)
 #   scope    subject | all                      (default all)
 #   subject  cc subject used when scope=subject
 #   filter   "" | prio | mac | nexus
+# --json: print the same rows (same filters/order) as a JSON array instead.
+# ⚠ / "diverged" is THIS machine's own copy being diverged (registry machines[THIS][id]),
+# not the machine-collapsed row: the owner's copy is never offered the diverge menu.
 # Display: priority · age · owner (m/n) + markers · subject · title
 #   ● running here   ⇢ replica older than the source's last activity   ⚠ diverged
 set -euo pipefail
 HUB_DIR="${HUB_DIR_OVERRIDE:-$HOME/.claude/session-hub}"
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 CLAUDE=$(session-config claude_bin 2>/dev/null || echo claude)
+THIS=$(session-config machine 2>/dev/null || echo "")
 VIEW=$(mktemp); META=$(mktemp); AG=$(mktemp)
 trap 'rm -f "$VIEW" "$META" "$AG"' EXIT
 session-index-view > "$VIEW"
 session-metastore all > "$META"
 # Display only: if agents lookup fails, show no running markers and keep listing.
-"$CLAUDE" agents --json --all > "$AG" 2>/dev/null || echo '[]' > "$AG"
-python3 - "$VIEW" "$META" "$AG" "${SESSIONS_STATE:-}" "$CLAUDE_DIR" << 'PYEOF'
+# SESSIONS_NO_AGENTS=1 (the panel's timer refresh): skip the costly lookup, no running markers.
+if [ "${SESSIONS_NO_AGENTS:-}" = 1 ]; then
+  echo '[]' > "$AG"
+else
+  "$CLAUDE" agents --json --all > "$AG" 2>/dev/null || echo '[]' > "$AG"
+fi
+AS_JSON=0; [ "${1:-}" = "--json" ] && AS_JSON=1
+python3 - "$VIEW" "$META" "$AG" "${SESSIONS_STATE:-}" "$CLAUDE_DIR" "$AS_JSON" "$THIS" "$HUB_DIR" << 'PYEOF'
 import json, os, signal, sys
 from datetime import datetime, timezone
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 view, meta, ag, state, claude_dir = sys.argv[1:6]
+as_json = sys.argv[6] == "1"
+this, hub_dir = sys.argv[7], sys.argv[8]
+try:
+    local_reg = json.load(open(os.path.join(hub_dir, "registry.json"))).get("machines", {}).get(this, {}) if this else {}
+    if not isinstance(local_reg, dict):
+        local_reg = {}
+except (OSError, ValueError, AttributeError):
+    local_reg = {}
 rows = json.load(open(view))
 meta = json.load(open(meta))
 try:
@@ -49,6 +67,8 @@ RANK = {"must": 0, "should": 1, "may": 2}
 BADGE = {"must": "!!", "should": "! ", "may": "· "}
 
 for r in rows:
+    e = local_reg.get(r["id"])
+    r["diverged"] = bool(isinstance(e, dict) and e.get("diverged"))
     m = meta.get(r["id"], {})
     r["owner"] = m.get("owner") or r.get("machine", "?")
     r["priority"] = m.get("priority", "")
@@ -101,6 +121,7 @@ def replica_lag(r):
     rep, act = parse(data.get("replicated_at")), parse(r["last_activity"])
     return rep is not None and act is not None and rep < act
 
+out = []
 for r in rows:
     marks = ""
     if r["id"] in running:
@@ -110,8 +131,18 @@ for r in rows:
     if r.get("diverged"):
         marks += "⚠"
     title = " ".join(str(r.get("title") or r.get("subject") or "—").split())
+    if as_json:
+        out.append({"id": r["id"], "owner": r["owner"], "machine": r.get("machine", ""),
+                    "priority": r["priority"], "subject": r.get("cc_subject") or "",
+                    "proj": r["proj"], "title": title, "age": age(r["last_activity"]),
+                    "last_activity": r["last_activity"],
+                    "running": r["id"] in running, "lag": "⇢" in marks,
+                    "diverged": bool(r.get("diverged"))})
+        continue
     # Markers right after the owner initial (fixed 3 cols) so a narrow pane never clips them.
     line = (f"{BADGE.get(r['priority'], '  ')} {age(r['last_activity']):>4} "
             f"{r['owner'][:1]}{marks:<3} {r['proj'][:12]:<12} {title}").rstrip()
     print(f"{r['id']}\t{line}")
+if as_json:
+    print(json.dumps(out))
 PYEOF
