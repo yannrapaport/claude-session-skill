@@ -4,12 +4,12 @@ import json, os, re, subprocess, tempfile
 from pathlib import Path
 from .model import Session
 
-ID_RE = re.compile(r"^[0-9a-fA-F-]+$")
+ID_RE = re.compile(r"[0-9a-fA-F][0-9a-fA-F-]*")
 NAME_MAX = 24
 
 
 def _valid(sid: str) -> str:
-    if not ID_RE.match(sid or ""):
+    if not ID_RE.fullmatch(sid or ""):
         raise ValueError(f"identifiant de session invalide : {sid!r}")
     return sid
 
@@ -52,31 +52,41 @@ class Actions:
 
     # ── actions ──
     def open(self, s: Session) -> str:
+        saved = True
         try:
-            tabs, existing = self._tabs(), self.zj.tab_names()
+            existing = self.zj.tab_names()
+            tabs = {k: v for k, v in self._tabs().items() if v in existing}  # prune closed tabs
             name = tabs.get(s.id)
-            if name and name in existing:
+            if name:
                 self.zj.go_to_tab(name)
             else:
-                name = self.tab_name_for(s, existing)
+                taken = list(existing) + list(tabs.values())
+                name = self.tab_name_for(s, taken)
                 self.zj.new_tab(name, self.cwd_for(s), self.command_for(s))
                 tabs[s.id] = name
-                self._save_tabs(tabs)
+                try:
+                    self._save_tabs(tabs)
+                except OSError:
+                    saved = False
         except (RuntimeError, OSError, subprocess.SubprocessError, ValueError) as e:
             return f"Échec : {e}"
+        note = "" if saved else " (onglet ouvert mais non mémorisé)"
         try:
             self.move_panel_to_current_tab()
         except (RuntimeError, OSError) as e:
-            return f"→ {name} (panneau non déplacé : {e})"
-        return f"→ {name}"
+            return f"→ {name}{note} (panneau non déplacé : {e})"
+        return f"→ {name}{note}"
 
     def move_panel_to_current_tab(self) -> None:
         # open the new panel first: a failure must never leave the user without one
-        old = [p["id"] for p in self.zj.panel_panes()]
         tab = self.zj.current_tab_id()
-        if tab is not None:
-            self.zj.open_panel_in_tab(tab, ["session-panel", "--docked"])
-        for i in old:
+        if tab is None:
+            return
+        old = [p["id"] for p in self.zj.panel_panes()]
+        self.zj.open_panel_in_tab(tab, ["session-panel", "--docked"])
+        me = os.environ.get("ZELLIJ_PANE_ID", "")
+        # closing our own pane kills this process: do it last
+        for i in sorted(old, key=lambda i: str(i) == me):
             self.zj.close_pane(i)
 
     def _script(self, *cmd: str) -> str:
@@ -84,8 +94,11 @@ class Actions:
             p = self.runner(list(cmd), capture_output=True, text=True, timeout=120)
         except (OSError, subprocess.SubprocessError) as e:
             return f"Échec : {e}"
-        out = ((p.stdout or "") + (p.stderr or "")).strip().splitlines()
-        return out[-1] if out else ("ok" if p.returncode == 0 else f"échec ({p.returncode})")
+        so = (p.stdout or "").strip().splitlines()
+        if p.returncode == 0:
+            return so[-1] if so else "ok"
+        se = (p.stderr or "").strip().splitlines()
+        return "Échec : " + (se[-1] if se else so[-1] if so else f"code {p.returncode}")
 
     def set_priority(self, s: Session, level: str) -> str:
         try:

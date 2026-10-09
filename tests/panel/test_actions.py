@@ -97,3 +97,35 @@ def test_send_prompt_failure(mk):
 
 def test_tab_name_strips(mk):
     assert mk(FakeZ()).tab_name_for(S(title="  x  "), []) == "x"
+
+def test_tab_name_reuse_does_not_corrupt_registry(mk, tmp_path):
+    z = FakeZ(); a = mk(z)
+    A, B = S(id="aaaa1111"), S(id="bbbb2222")
+    a.open(A); z._tabs.remove("Refonte pricing")      # A's tab closed by hand
+    a.open(B)                                          # B takes the plain name
+    z.calls.clear(); a.open(A)                         # A must get its own tab, not jump to B's
+    assert z.calls[0][0] == "new" and z.calls[0][1] == "Refonte pricing ·aaaa"
+    reg = json.loads((tmp_path / "tabs.json").read_text())
+    assert reg == {"bbbb2222": "Refonte pricing", "aaaa1111": "Refonte pricing ·aaaa"}
+
+def test_move_panel_own_pane_last_and_none_tab(mk, monkeypatch):
+    monkeypatch.setenv("ZELLIJ_PANE_ID", "3")
+    z = FakeZ(panels=[3, 5, 6]); mk(z).move_panel_to_current_tab()
+    assert [c for c in z.calls if c[0] == "close"] == [("close", 5), ("close", 6), ("close", 3)]
+    z2 = FakeZ(panels=[3]); z2.current = None; mk(z2).move_panel_to_current_tab()
+    assert z2.calls == []
+
+def test_id_validation_strict(mk):
+    a = mk(FakeZ())
+    for bad in ("aaaa\n", "-abc", "", "../x"):
+        with pytest.raises(ValueError): a.command_for(S(id=bad))
+
+def test_save_failure_still_moves_panel(mk, monkeypatch):
+    z = FakeZ(panels=[3]); a = mk(z)
+    monkeypatch.setattr(a, "_save_tabs", lambda d: (_ for _ in ()).throw(OSError("ro")))
+    msg = a.open(S())
+    assert "non mémorisé" in msg and "Échec" not in msg and ("panel", 1) in z.calls
+
+def test_script_nonzero_exit_message(mk):
+    def run(cmd, **kw): return subprocess.CompletedProcess(cmd, 2, "out\n", "bad thing\n")
+    assert mk(FakeZ(), runner=run).sync() == "Échec : bad thing"
