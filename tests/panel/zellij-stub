@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# zellij stub: logs argv to $ZJ_LOG; serves list-panes/list-tabs from $ZJ_PANES/$ZJ_TABS (JSON files).
+echo "$*" >> "${ZJ_LOG:?}"
+args=" $* "
+case "$args" in
+  *" list-panes "*) cat "${ZJ_PANES:?}" ;;
+  *" list-tabs "*)  cat "${ZJ_TABS:?}" ;;
+  *" new-pane "*)   echo "terminal_${ZJ_NEW_PANE_ID:-9}" ;;
+esac
+exit "${ZJ_RC:-0}"
