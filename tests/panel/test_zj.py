@@ -44,7 +44,7 @@ def test_new_tab_and_panel(zj):
     zj.new_tab("Refonte", "/tmp", ["claude", "--resume", "abc"])
     zj.open_panel_in_tab(1, ["panel-cmd"])
     L = log(zj)
-    assert "action new-tab --name Refonte --cwd /tmp -- claude --resume abc" in L
+    assert "action new-tab --name=Refonte --cwd=/tmp -- claude --resume abc" in L
     assert "action new-pane --floating --pinned true --name sessions-panel --tab-id 1 -- panel-cmd" in L
 
 def test_unavailable(monkeypatch, tmp_path):
@@ -105,3 +105,7 @@ def test_panel_focused_falls_back_to_first_nonfloating(zj):
     ]
     _set(zj, "p.json", panes)
     assert zj.focused_terminal_in_current_tab() == 0
+
+def test_new_tab_dash_name(zj):
+    zj.new_tab("-dash tab", "/tmp", ["claude"])
+    assert "action new-tab --name=-dash tab --cwd=/tmp -- claude" in log(zj)

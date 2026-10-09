@@ -64,7 +64,7 @@ class Zellij:
         self._run("go-to-tab-name", "--", name)
 
     def new_tab(self, name: str, cwd: str, command: list[str]) -> None:
-        self._run("new-tab", "--name", name, "--cwd", cwd, "--", *command)
+        self._run("new-tab", f"--name={name}", f"--cwd={cwd}", "--", *command)
 
     def panel_panes(self) -> list[dict]:
         return [p for p in self.panes() if self._is_panel(p)]
