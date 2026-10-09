@@ -17,6 +17,13 @@ from panel.actions import Actions
 from panel.app import SessionPanel
 
 
+def pause() -> None:
+    try:
+        pause()
+    except EOFError:
+        pass
+
+
 def machine_name() -> str:
     """This machine's name; empty when the config is missing (the panel then says so)."""
     try:
@@ -30,7 +37,7 @@ def main() -> int:
     zj = Zellij()
     if (msg := zj.available()):
         print(msg)
-        input("⏎ ")
+        pause()
         return 1
     me = int(os.environ.get("ZELLIJ_PANE_ID", "-1"))
     try:
@@ -44,7 +51,7 @@ def main() -> int:
         zj.dock(me)
     except RuntimeError as e:
         print(e)
-        input("⏎ ")
+        pause()
         return 1
     claude_dir = pathlib.Path(os.environ.get("CLAUDE_DIR", pathlib.Path.home() / ".claude"))
     state_dir = claude_dir / "session-panel"

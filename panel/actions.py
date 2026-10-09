@@ -43,9 +43,10 @@ class Actions:
 
     def command_for(self, s: Session) -> list[str]:
         sid = _valid(s.id)
-        if s.diverged:
+        # Unknown machine (config missing): never divert or migrate — open locally.
+        if self.this and s.diverged and s.owner != self.this:
             return ["session-diverge", sid]
-        if s.owner and s.owner != self.this:
+        if self.this and s.owner and s.owner != self.this:
             return ["bash", "-c", f"session-migrate {sid} && session-open {sid} || "
                                   "{ echo; read -r -p '⏎ pour fermer' _; }"]
         return ["session-open", sid]

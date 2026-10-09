@@ -39,7 +39,10 @@ def test_command_rules(mk):
     a = mk(FakeZ())
     assert a.command_for(S()) == ["session-open", "aaaa1111-0000"]
     assert a.command_for(S(owner="nexus"))[0] == "bash" and "session-migrate aaaa1111-0000" in a.command_for(S(owner="nexus"))[2]
-    assert a.command_for(S(diverged=True)) == ["session-diverge", "aaaa1111-0000"]
+    assert a.command_for(S(owner="nexus", diverged=True)) == ["session-diverge", "aaaa1111-0000"]
+    assert a.command_for(S(diverged=True)) == ["session-open", "aaaa1111-0000"]   # owner's copy is never "diverged"
+    blind = Actions(FakeZ(), "", a.state_dir, cwd_for=lambda s: "/tmp")           # machine unknown
+    assert blind.command_for(S(owner="nexus", diverged=True)) == ["session-open", "aaaa1111-0000"]
     with pytest.raises(ValueError): a.command_for(S(id="../x"))
 
 def test_open_new_then_existing_then_stale(mk, tmp_path):

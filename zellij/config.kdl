@@ -3,7 +3,8 @@ show_startup_tips false
 show_release_notes false
 keybinds {
     shared {
-        bind "Ctrl Space" {
+        // Alt s: fallback when the terminal sends Ctrl+Space as NUL (e.g. Termius)
+        bind "Ctrl Space" "Alt s" {
             Run "session-panel" { floating true; pinned true; name "sessions-panel"; close_on_exit true; }
         }
     }

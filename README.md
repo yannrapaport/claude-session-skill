@@ -59,7 +59,7 @@ session-purge-headless --yes    # delete, then rescan
 
 ## Session manager
 
-`sessions` (or `cc <subject>`) attaches to a Zellij session `cc-<subject>` (`cc-sessions` outside any subject), started in the subject root. `Ctrl+Space` toggles the sessions panel: a pinned floating pane (36 columns, docked left, `session-panel`, Textual app). Each session opens in its own Zellij tab; the panel follows you across tabs. Same tool on Mac and Nexus. Markers: `●` open in a tab, `⇢` replica behind its source, `⚠` diverged.
+`sessions` (or `cc <subject>`) attaches to a Zellij session `cc-<subject>` (`cc-sessions` outside any subject), started in the subject root. `Ctrl+Space` (or `Alt+s` when the terminal sends Ctrl+Space as NUL) toggles the sessions panel: a pinned floating pane (36 columns, docked left, `session-panel`, Textual app). Each session opens in its own Zellij tab; the panel follows you across tabs. Same tool on Mac and Nexus. Markers: `●` open in a tab, `⇢` replica behind its source, `⚠` diverged.
 
 | Key | Action |
 |-----|--------|

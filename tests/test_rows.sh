@@ -8,6 +8,9 @@ cat > "$H/registry.json" <<'JSON'
 {"version": 2, "machines": {
  "mac":   {"0dd": {"cwd": "/x", "project_relative": "projects/tpg/rakam", "cc_subject": "tpg", "cc_rel": "rakam",
                    "last_activity": "2026-10-01T10:00:00Z", "title": "Vieux", "turns": 3, "status": "active"},
+           "mid": {"cwd": "/z", "project_relative": "projects/tpg", "cc_subject": "tpg", "cc_rel": "",
+                   "last_activity": "2026-10-04T10:00:00Z", "title": "Milieu", "turns": 5, "status": "active",
+                   "diverged": true},
            "new": {"cwd": "/y", "project_relative": "ai-brain", "cc_subject": "brain", "cc_rel": "",
                    "last_activity": "2026-10-08T10:00:00Z", "title": "Récent", "turns": 9, "status": "active"}},
  "nexus": {"mid": {"cwd": "/z", "project_relative": "projects/tpg", "cc_subject": "tpg", "cc_rel": "",

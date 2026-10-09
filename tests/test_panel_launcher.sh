@@ -27,3 +27,10 @@ else
     "$(grep -q 'close-pane --pane-id terminal_3' "$_L/log" && echo -n yes || echo -n no) $(grep -q 'terminal_5 -x 0' "$_L/log" && echo yes || echo no)"
   rm -rf "$_L"
 fi
+
+# sessions: refuses to nest inside Zellij (script(1) gives it a tty)
+if command -v script >/dev/null; then
+  _o=$(ZELLIJ=0 script -q /dev/null bash -c "sessions" 2>&1 </dev/null || true)
+  case "$_o" in *"Déjà dans Zellij"*) _r=ok ;; *) _r="$_o" ;; esac
+  assert_eq "sessions: refuses to nest in Zellij" "ok" "$_r"
+fi

@@ -227,6 +227,8 @@ class SessionPanel(App):
         self._filter.display = False
         self._empty.display = False
         self._tree.focus()
+        if getattr(self.acts, "this", "?") == "":
+            self._message = ("Échec : machine inconnue — vérifie ~/.claude/session-migrate.yml", "bold red")
         self._render_status()
         self.refresh_sessions()
         self.set_interval(30, self.refresh_sessions)

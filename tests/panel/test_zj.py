@@ -45,7 +45,7 @@ def test_new_tab_and_panel(zj):
     zj.open_panel_in_tab(1, ["panel-cmd"])
     L = log(zj)
     assert "action new-tab --name=Refonte --cwd=/tmp -- claude --resume abc" in L
-    assert "action new-pane --floating --pinned true --name sessions-panel --tab-id 1 -- panel-cmd" in L
+    assert "action new-pane --floating --pinned true --close-on-exit --name sessions-panel --tab-id 1 -- panel-cmd" in L
 
 def test_unavailable(monkeypatch, tmp_path):
     monkeypatch.delenv("ZELLIJ", raising=False); monkeypatch.delenv("ZELLIJ_SESSION_NAME", raising=False)

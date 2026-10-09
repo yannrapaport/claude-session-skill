@@ -268,3 +268,12 @@ async def test_prompts_read_per_refresh_not_per_keystroke():
         for _ in range(5):
             await app.palette_titles()
         assert acts.prompt_reads == reads == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_machine_is_flagged():
+    acts = FakeActions(); acts.this = ""
+    app = SessionPanel(load=lambda v: ([], None), actions=acts, view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        assert "machine inconnue" in app.status_text()

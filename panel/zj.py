@@ -77,7 +77,7 @@ class Zellij:
                   "-x", "0", "-y", "0", "--width", str(PANEL_WIDTH), "--height", "100%")
 
     def open_panel_in_tab(self, tab_id: int, command: list[str]) -> None:
-        self._run("new-pane", "--floating", "--pinned", "true", "--name", PANEL_TITLE,
+        self._run("new-pane", "--floating", "--pinned", "true", "--close-on-exit", "--name", PANEL_TITLE,
                   "--tab-id", str(tab_id), "--", *command)
 
     def focused_terminal_in_current_tab(self, exclude_title: str = PANEL_TITLE) -> int | None:
