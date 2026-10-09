@@ -1,0 +1,10 @@
+// Session manager — installed to ~/.config/zellij/config.kdl when none exists.
+show_startup_tips false
+show_release_notes false
+keybinds {
+    shared {
+        bind "Ctrl Space" {
+            Run "session-panel" { floating true; pinned true; name "sessions-panel"; close_on_exit true; }
+        }
+    }
+}

@@ -61,13 +61,6 @@ PY
 assert_eq "C2: registry-get --machine" "nexus False" \
   "$(on nexus session-registry-get --machine nexus "$X" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["machine"],d["diverged"])')"
 assert_eq "C2: registry-get --machine absent" "{}" "$(on nexus session-registry-get --machine elsewhere "$X")"
-export SESSIONS_STATE="$MTMP/st"
-: > "$MTMP/tmux.log"
-on nexus session-tui-act open "$X"
-case "$(tail -1 "$MTMP/tmux.log")" in
-  *session-diverge*) r=diverge ;; *"session-open $X"*) r=open ;; *) r="$(tail -1 "$MTMP/tmux.log")" ;; esac
-assert_eq "C2: owner opens its own copy (not the diverge menu)" "open" "$r"
-unset SESSIONS_STATE
 git -C "$N/.claude/session-hub" checkout -q -- registry.json   # drop the hand-made entries
 rc=0; echo c | on nexus session-diverge "$X" >/dev/null 2>&1 || rc=$?
 assert_eq "C2: diverge refused on the owner" "1" "$rc"
@@ -156,9 +149,6 @@ assert_eq "M1: open rejects a bad id" "1" "$rc"
 rc=0; on mac session-priority "../x" must >/dev/null 2>&1 || rc=$?
 assert_eq "M1: priority rejects a bad id" "1" "$rc"
 assert_eq "M1: priority wrote nothing" "no" "$(yn test -e "$M/.claude/session-hub/x.json")"
-: > "$MTMP/tmux.log"
-rc=0; on mac env SESSIONS_STATE="$MTMP/st" session-tui-act open "../x" >/dev/null 2>&1 || rc=$?
-assert_eq "M1: tui-act rejects a bad id" "1 0" "$rc $(grep -c respawn-pane "$MTMP/tmux.log" || true)"
 rc=0; on mac session-metastore set "../evil" owner '"x"' >/dev/null 2>&1 || rc=$?
 assert_eq "M1: metastore set rejects a bad id" "1 no" "$rc $(yn test -e "$M/.claude/session-hub/evil.json")"
 rc=0; on mac session-metastore get "a/b" >/dev/null 2>&1 || rc=$?

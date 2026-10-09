@@ -1,0 +1,65 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["textual>=8,<9"]
+# ///
+"""session-panel — the sessions panel in a pinned Zellij floating pane.
+No argument (keybind): if a sessions-panel already exists anywhere in this Zellij
+session, close it (and exit) — that is the toggle; otherwise dock this pane and run.
+--docked: launched by the panel itself in a new tab; dock and run."""
+import os, sys, pathlib, subprocess
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+os.environ["PATH"] = f"{ROOT / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}"
+from panel.zj import Zellij
+from panel.model import ViewState, load_sessions
+from panel.actions import Actions
+from panel.app import SessionPanel
+
+
+def machine_name() -> str:
+    """This machine's name; empty when the config is missing (the panel then says so)."""
+    try:
+        p = subprocess.run(["session-config", "machine"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def main() -> int:
+    zj = Zellij()
+    if (msg := zj.available()):
+        print(msg)
+        input("⏎ ")
+        return 1
+    me = int(os.environ.get("ZELLIJ_PANE_ID", "-1"))
+    try:
+        others = [p for p in zj.panel_panes() if p["id"] != me]
+        if "--docked" not in sys.argv and others:
+            for p in others:
+                zj.close_pane(p["id"])
+            return 0                               # toggle off: our own pane closes on exit
+        for p in others:
+            zj.close_pane(p["id"])
+        zj.dock(me)
+    except RuntimeError as e:
+        print(e)
+        input("⏎ ")
+        return 1
+    claude_dir = pathlib.Path(os.environ.get("CLAUDE_DIR", pathlib.Path.home() / ".claude"))
+    state_dir = claude_dir / "session-panel"
+    view = ViewState.load(state_dir / "state.json")
+    zname = os.environ.get("ZELLIJ_SESSION_NAME", "").removeprefix("cc-")
+    view.subject = "" if zname == "sessions" else zname
+    rows_dir = state_dir / "rows-state"
+    app = SessionPanel(load=lambda v: load_sessions(v, state_dir=rows_dir),
+                       actions=Actions(zj, machine_name(), state_dir), view=view,
+                       on_view_change=lambda v: v.save(state_dir / "state.json"))
+    if os.environ.get("SESSION_PANEL_DRY_RUN"):
+        return 0
+    app.run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
