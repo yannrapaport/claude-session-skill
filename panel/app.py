@@ -188,6 +188,7 @@ class SessionPanel(App):
         self.load, self.acts, self.view = load, actions, view
         self.load_light, self.refresh_seconds = load_light, refresh_seconds
         self._refresh_timer = None
+        self._light_ticks = 0   # timer ticks since the last full load
         self.on_view_change = on_view_change or (lambda v: None)
         self.sessions: list[Session] = []
         self._error: str | None = None
@@ -247,13 +248,19 @@ class SessionPanel(App):
 
     # ── loading ──
     def timer_refresh(self) -> None:
-        """Periodic refresh: light load; skipped while another load runs (never cancel a full one)."""
-        if not self._loading:
-            self.refresh_sessions(light=True)
+        """Periodic refresh: light load, but a full one every ~5 min so running markers can't go stale.
+        Skipped while another load runs (never cancel a full one)."""
+        if self._loading:
+            return
+        self._light_ticks += 1
+        every = max(1, round(300 / self.refresh_seconds))
+        self.refresh_sessions(light=self._light_ticks < every)
 
     def refresh_sessions(self, light: bool = False) -> None:
         """Reload rows in a thread; the tree is rebuilt on the UI thread when they land."""
         keep_running = light and self.load_light is not None
+        if not keep_running:
+            self._light_ticks = 0
         load = self.load_light if keep_running else self.load
         self._loading = True
         if self.is_mounted:

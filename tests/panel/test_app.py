@@ -310,7 +310,7 @@ async def test_timer_refresh_is_light_and_keeps_running_markers():
     full = lambda v: (calls.append("full"), ([S("a1", "tpg", "Refonte", running=True)], None))[1]
     light = lambda v: (calls.append("light"), ([S("a1", "tpg", "Refonte"), S("n1", "tpg", "Neuve")], None))[1]
     acts = FakeActions()
-    app = SessionPanel(load=full, load_light=light, actions=acts, view=ViewState(), refresh_seconds=3600)
+    app = SessionPanel(load=full, load_light=light, actions=acts, view=ViewState(), refresh_seconds=30)
     async with app.run_test(size=(36, 30)) as pilot:
         await settle(app, pilot)
         assert calls == ["full"]
@@ -329,3 +329,27 @@ async def test_refresh_interval_is_configurable():
     async with app.run_test(size=(36, 30)) as pilot:
         await settle(app, pilot)
         assert app._refresh_timer is not None and app._refresh_timer._interval == 7
+
+
+@pytest.mark.asyncio
+async def test_every_nth_timer_tick_is_full_so_running_markers_cannot_go_stale():
+    """refresh 60 s → N = 5: ticks 1-4 light (markers carried), tick 5 full (markers re-read)."""
+    calls = []
+    running = [True]
+    full = lambda v: (calls.append("full"), ([S("a1", "tpg", "Refonte", running=running[0])], None))[1]
+    light = lambda v: (calls.append("light"), ([S("a1", "tpg", "Refonte")], None))[1]
+    app = SessionPanel(load=full, load_light=light, actions=FakeActions(), view=ViewState(), refresh_seconds=60)
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        running[0] = False                                  # the session stopped
+        for _ in range(4):
+            app.timer_refresh(); await settle(app, pilot)
+        assert calls == ["full"] + ["light"] * 4 and app.sessions[0].running   # carried over
+        app.timer_refresh(); await settle(app, pilot)
+        assert calls[-1] == "full" and not app.sessions[0].running            # ● gone without r
+        app.timer_refresh(); await settle(app, pilot)
+        assert calls[-1] == "light"                                          # counter reset
+        await pilot.press("r"); await settle(app, pilot)                     # a full load resets it too
+        for _ in range(4):
+            app.timer_refresh(); await settle(app, pilot)
+        assert calls[-5:] == ["full"] + ["light"] * 4
