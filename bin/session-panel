@@ -1,12 +1,14 @@
 #!/usr/bin/env -S uv run --quiet --script
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.9"
 # dependencies = ["textual>=8,<9"]
 # ///
 """session-panel — the sessions panel in a pinned Zellij floating pane.
-No argument (keybind): if a sessions-panel already exists anywhere in this Zellij
-session, close it (and exit) — that is the toggle; otherwise dock this pane and run.
---docked: launched by the panel itself in a new tab; dock and run."""
+No argument (keybind): if a sessions-panel already exists in this tab, close it (and
+exit) — that is the toggle; if it is in another tab, close it there and dock here
+(the panel follows you); otherwise dock this pane and run.
+--docked: launched by the panel itself in a new tab; close the old one(s), dock and run.
+SESSION_PANEL_REFRESH: seconds between automatic refreshes (default 30)."""
 import os, sys, pathlib, subprocess
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -33,6 +35,14 @@ def machine_name() -> str:
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
+def refresh_seconds() -> float:
+    try:
+        v = float(os.environ.get("SESSION_PANEL_REFRESH", "30"))
+    except ValueError:
+        return 30.0
+    return v if v >= 1 else 30.0
+
+
 def main() -> int:
     zj = Zellij()
     if (msg := zj.available()):
@@ -40,14 +50,21 @@ def main() -> int:
         pause()
         return 1
     me = int(os.environ.get("ZELLIJ_PANE_ID", "-1"))
+    docked = "--docked" in sys.argv
     try:
-        others = [p for p in zj.panel_panes() if p["id"] != me]
-        if "--docked" not in sys.argv and others:
+        panes = zj.panes()
+        my_tab = next((p.get("tab_id") for p in panes if p["id"] == me), None)
+        others = [p for p in panes if zj._is_panel(p) and p["id"] != me]
+        if not docked and any(my_tab is None or p.get("tab_id") == my_tab for p in others):
             for p in others:
                 zj.close_pane(p["id"])
             return 0                               # toggle off: our own pane closes on exit
-        for p in others:
-            zj.close_pane(p["id"])
+        for p in others:                           # elsewhere (or --docked): move it here
+            try:
+                zj.close_pane(p["id"])
+            except RuntimeError:
+                if not docked:
+                    raise                          # --docked: its owner is closing it already
         zj.dock(me)
     except RuntimeError as e:
         print(e)
@@ -61,8 +78,11 @@ def main() -> int:
     rows_dir = state_dir / "rows-state"
     app = SessionPanel(load=lambda v: load_sessions(v, state_dir=rows_dir),
                        actions=Actions(zj, machine_name(), state_dir), view=view,
-                       on_view_change=lambda v: v.save(state_dir / "state.json"))
+                       on_view_change=lambda v: v.save(state_dir / "state.json"),
+                       load_light=lambda v: load_sessions(v, state_dir=rows_dir, agents=False),
+                       refresh_seconds=refresh_seconds())
     if os.environ.get("SESSION_PANEL_DRY_RUN"):
+        print(f"refresh={app.refresh_seconds:g}")
         return 0
     app.run()
     return 0

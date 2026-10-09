@@ -38,6 +38,11 @@ assert_eq "C1: mac entry pruned"             "-"                     "$(reg nexu
 mkdir -p "$MTMP/st"; echo subject > "$MTMP/st/scope"; echo tpg > "$MTMP/st/subject"
 assert_eq "C1: listed under its subject" "1" \
   "$(on nexus env SESSIONS_STATE="$MTMP/st" session-rows | grep -c "^$R" || true)"
+# I5: SESSIONS_NO_AGENTS=1 (panel timer refresh) skips the `claude agents` call; default still makes it.
+: > "$MTMP/claude.log"; on nexus env SESSIONS_NO_AGENTS=1 session-rows --json >/dev/null 2>&1
+assert_eq "rows: SESSIONS_NO_AGENTS=1 skips claude agents" "0" "$(grep -c agents "$MTMP/claude.log" || true)"
+: > "$MTMP/claude.log"; on nexus session-rows --json >/dev/null 2>&1
+assert_eq "rows: default reads claude agents" "1" "$(grep -c agents "$MTMP/claude.log" || true)"
 # Round trip: back to the Mac, into its original directory.
 rc=0; out=$(on mac session-migrate "$R" --yes 2>&1) || rc=$?
 assert_eq "C1: nexus → mac migrates back" "0" "$rc"

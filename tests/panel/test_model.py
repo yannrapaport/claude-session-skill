@@ -46,3 +46,12 @@ def test_view_state_cycle_toggle_filter(tmp_path):
 def test_session_without_subject_groups_under_tilde():
     s = Session(**{**ROWS[0], "id": "d4", "subject": ""})
     assert group_by_subject([s])[0][0] == "~"
+
+
+def test_light_load_skips_agents():
+    seen = []
+    def run(cmd, **kw):
+        seen.append(kw["env"]); return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+    load_sessions(ViewState(), runner=run)
+    load_sessions(ViewState(), runner=run, agents=False)
+    assert "SESSIONS_NO_AGENTS" not in seen[0] and seen[1]["SESSIONS_NO_AGENTS"] == "1"

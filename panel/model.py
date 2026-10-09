@@ -65,9 +65,12 @@ class ViewState:
             return cls()
 
 
-def load_sessions(state: ViewState, runner=subprocess.run, state_dir: Path | None = None):
-    """Return (sessions, error_message). Never raises on bad output."""
+def load_sessions(state: ViewState, runner=subprocess.run, state_dir: Path | None = None, agents: bool = True):
+    """Return (sessions, error_message). Never raises on bad output.
+    agents=False: skip the costly `claude agents` read (running markers all off)."""
     env = state.as_env(state_dir or Path(tempfile.mkdtemp(prefix="session-panel-")))
+    if not agents:
+        env["SESSIONS_NO_AGENTS"] = "1"
     try:
         p = runner(["session-rows", "--json"], capture_output=True, text=True, env=env, timeout=60)
     except (OSError, subprocess.SubprocessError) as e:

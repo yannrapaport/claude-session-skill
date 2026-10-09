@@ -20,7 +20,12 @@ trap 'rm -f "$VIEW" "$META" "$AG"' EXIT
 session-index-view > "$VIEW"
 session-metastore all > "$META"
 # Display only: if agents lookup fails, show no running markers and keep listing.
-"$CLAUDE" agents --json --all > "$AG" 2>/dev/null || echo '[]' > "$AG"
+# SESSIONS_NO_AGENTS=1 (the panel's timer refresh): skip the costly lookup, no running markers.
+if [ "${SESSIONS_NO_AGENTS:-}" = 1 ]; then
+  echo '[]' > "$AG"
+else
+  "$CLAUDE" agents --json --all > "$AG" 2>/dev/null || echo '[]' > "$AG"
+fi
 AS_JSON=0; [ "${1:-}" = "--json" ] && AS_JSON=1
 python3 - "$VIEW" "$META" "$AG" "${SESSIONS_STATE:-}" "$CLAUDE_DIR" "$AS_JSON" "$THIS" "$HUB_DIR" << 'PYEOF'
 import json, os, signal, sys

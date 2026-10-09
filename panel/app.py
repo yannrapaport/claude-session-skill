@@ -182,9 +182,12 @@ class SessionPanel(App):
         Binding("ctrl+space,ctrl+@", "quit", "Fermer", show=False),
     ]
 
-    def __init__(self, load, actions, view: ViewState, on_view_change=None):
+    def __init__(self, load, actions, view: ViewState, on_view_change=None, load_light=None, refresh_seconds: float = 30):
+        """load_light: cheaper load for timer refreshes (no running markers — the previous ones are kept)."""
         super().__init__()
         self.load, self.acts, self.view = load, actions, view
+        self.load_light, self.refresh_seconds = load_light, refresh_seconds
+        self._refresh_timer = None
         self.on_view_change = on_view_change or (lambda v: None)
         self.sessions: list[Session] = []
         self._error: str | None = None
@@ -236,27 +239,34 @@ class SessionPanel(App):
             self._message = ("machine inconnue — ouverture désactivée (vérifie ~/.claude/session-migrate.yml)", "bold red")
         self._render_status()
         self.refresh_sessions()
-        self.set_interval(30, self.refresh_sessions)
+        self._refresh_timer = self.set_interval(self.refresh_seconds, self.timer_refresh)
 
     def on_resize(self) -> None:
         if self._loaded:
             self._rebuild()
 
     # ── loading ──
-    def refresh_sessions(self) -> None:
+    def timer_refresh(self) -> None:
+        """Periodic refresh: light load; skipped while another load runs (never cancel a full one)."""
+        if not self._loading:
+            self.refresh_sessions(light=True)
+
+    def refresh_sessions(self, light: bool = False) -> None:
         """Reload rows in a thread; the tree is rebuilt on the UI thread when they land."""
+        keep_running = light and self.load_light is not None
+        load = self.load_light if keep_running else self.load
         self._loading = True
         if self.is_mounted:
             self._render_status()
         def job():
             try:
-                sessions, err = self.load(self.view)
+                sessions, err = load(self.view)
                 sessions = list(sessions or [])
             except Exception as e:  # load must never take the panel down
                 sessions, err = [], f"Chargement impossible : {e}"
             open_ids, prompts = self._side_info()
             if not get_current_worker().is_cancelled:
-                self._from_thread(self._apply, sessions, err, open_ids, prompts)
+                self._from_thread(self._apply, sessions, err, open_ids, prompts, keep_running)
         self.run_worker(job, thread=True, group="load", exclusive=True, exit_on_error=False)
 
     def _side_info(self) -> tuple[set[str], list[str]]:
@@ -271,7 +281,11 @@ class SessionPanel(App):
             prompts = []
         return open_ids, prompts
 
-    def _apply(self, sessions: list[Session], err: str | None, open_ids=frozenset(), prompts=()) -> None:
+    def _apply(self, sessions: list[Session], err: str | None, open_ids=frozenset(), prompts=(), keep_running=False) -> None:
+        if keep_running:
+            was = {s.id for s in self.sessions if s.running}
+            for s in sessions:
+                s.running = s.id in was
         self.sessions, self._error, self._loaded, self._loading = sessions, err, True, False
         self._open_ids, self.prompt_lines = set(open_ids), list(prompts)
         self._rebuild()

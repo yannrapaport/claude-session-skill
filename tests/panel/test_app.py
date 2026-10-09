@@ -301,3 +301,31 @@ async def test_p_in_filter_box_types_a_p():
         await settle(app, pilot)
         await pilot.press("slash", "p"); await pilot.pause()
         assert app._filter.value == "p"
+
+
+@pytest.mark.asyncio
+async def test_timer_refresh_is_light_and_keeps_running_markers():
+    """Timer: light load (no `claude agents`), running markers carried over. r / after an action: full load."""
+    calls = []
+    full = lambda v: (calls.append("full"), ([S("a1", "tpg", "Refonte", running=True)], None))[1]
+    light = lambda v: (calls.append("light"), ([S("a1", "tpg", "Refonte"), S("n1", "tpg", "Neuve")], None))[1]
+    acts = FakeActions()
+    app = SessionPanel(load=full, load_light=light, actions=acts, view=ViewState(), refresh_seconds=3600)
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        assert calls == ["full"]
+        app.timer_refresh(); await settle(app, pilot)
+        assert calls == ["full", "light"]
+        assert {s.id: s.running for s in app.sessions} == {"a1": True, "n1": False}
+        await pilot.press("r"); await settle(app, pilot)
+        assert calls[-1] == "full" and app.sessions[0].running
+        app.do_sync(); await settle(app, pilot)
+        assert calls[-1] == "full"
+
+
+@pytest.mark.asyncio
+async def test_refresh_interval_is_configurable():
+    app = SessionPanel(load=lambda v: (SESS, None), actions=FakeActions(), view=ViewState(), refresh_seconds=7)
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        assert app._refresh_timer is not None and app._refresh_timer._interval == 7

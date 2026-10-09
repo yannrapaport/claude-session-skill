@@ -14,7 +14,7 @@ else
       ZJ_LOG="$_L/log" ZJ_PANES="$_L/panes.json" ZJ_TABS="$_L/tabs.json" SESSION_PANEL_DRY_RUN=1 \
       uv run --quiet --script "$SCRIPT_DIR/../bin/session-panel" "${@:2}" </dev/null >"$_L/out" 2>&1 || rc=$?
   }
-  _launch '[{"id":3,"title":"sessions-panel","is_plugin":false,"is_floating":true},{"id":5,"title":"sessions-panel","is_plugin":false,"is_floating":true}]'
+  _launch '[{"id":3,"title":"sessions-panel","is_plugin":false,"is_floating":true,"tab_id":0},{"id":5,"title":"sessions-panel","is_plugin":false,"is_floating":true,"tab_id":0}]'
   assert_eq "launcher toggle-off: exit 0" "0" "$rc"
   assert_eq "launcher toggle-off: closes the other panel" "yes" "$(grep -q 'close-pane --pane-id terminal_3' "$_L/log" && echo yes || echo no)"
   assert_eq "launcher toggle-off: no dock" "no" "$(grep -q change-floating-pane-coordinates "$_L/log" && echo yes || echo no)"
@@ -25,6 +25,20 @@ else
   _launch '[{"id":3,"title":"sessions-panel","is_plugin":false,"is_floating":true}]' --docked
   assert_eq "launcher --docked: closes old panel then docks" "yes yes" \
     "$(grep -q 'close-pane --pane-id terminal_3' "$_L/log" && echo -n yes || echo -n no) $(grep -q 'terminal_5 -x 0' "$_L/log" && echo yes || echo no)"
+  # I2: panel open in another tab → Ctrl+Space here moves it here (close there, dock here), not a toggle-off
+  _launch '[{"id":3,"title":"sessions-panel","is_plugin":false,"is_floating":true,"tab_id":0},{"id":5,"title":"sessions-panel","is_plugin":false,"is_floating":true,"tab_id":1}]'
+  assert_eq "launcher other tab: exit 0" "0" "$rc"
+  assert_eq "launcher other tab: closes the panel there and docks here" "yes yes" \
+    "$(grep -q 'close-pane --pane-id terminal_3' "$_L/log" && echo -n yes || echo -n no) $(grep -q 'terminal_5 -x 0' "$_L/log" && echo yes || echo no)"
+  # I6: --docked while the old panel is already closing → close failure ignored, still docks
+  ZJ_FAIL=close-pane _launch '[{"id":3,"title":"sessions-panel","is_plugin":false,"is_floating":true,"tab_id":0}]' --docked
+  assert_eq "launcher --docked close race: exit 0" "0" "$rc"
+  assert_eq "launcher --docked close race: still docks" "yes" "$(grep -q 'terminal_5 -x 0' "$_L/log" && echo yes || echo no)"
+  # I5: refresh interval from SESSION_PANEL_REFRESH (default 30, bad value → 30)
+  SESSION_PANEL_REFRESH=90 _launch '[{"id":5,"title":"sessions-panel","is_plugin":false,"is_floating":true,"tab_id":0}]'
+  assert_eq "launcher refresh: env honoured" "yes" "$(grep -q 'refresh=90' "$_L/out" && echo yes || echo no)"
+  SESSION_PANEL_REFRESH=abc _launch '[{"id":5,"title":"sessions-panel","is_plugin":false,"is_floating":true,"tab_id":0}]'
+  assert_eq "launcher refresh: bad value → 30" "yes" "$(grep -q 'refresh=30' "$_L/out" && echo yes || echo no)"
   rm -rf "$_L"
 fi
 
