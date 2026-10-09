@@ -160,23 +160,6 @@ PATH="$BIN_DIR:$PATH" session-install-settings "$HOME/.claude/settings.json" \
   "$INSTALL_DIR/hooks/stop-replicate" \
   "$(grep -q '^replica_to:' "$CONFIG" 2>/dev/null && echo 1 || echo 0)"
 
-# ── 4c. Zellij panel: config (only if none) + default prompts ───────────────
-ZCFG="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/config.kdl"
-if [ ! -f "$ZCFG" ]; then
-  mkdir -p "$(dirname "$ZCFG")"; cp "$INSTALL_DIR/zellij/config.kdl" "$ZCFG"
-  echo "✓  Zellij config installed ($ZCFG)"
-elif grep -q "sessions-panel" "$ZCFG"; then
-  echo "✓  Zellij config already binds the sessions panel ($ZCFG)"
-else
-  echo "⚠  $ZCFG exists but does not bind the sessions panel (sessions-panel)."
-  echo "   Paste this into it (merge into an existing keybinds { shared { … } } if you have one):"
-  sed -n '/^keybinds {/,$p' "$INSTALL_DIR/zellij/config.kdl" | sed 's/^/     /'
-fi
-PROMPTS="${XDG_CONFIG_HOME:-$HOME/.config}/session-panel/prompts.txt"
-[ -f "$PROMPTS" ] || { mkdir -p "$(dirname "$PROMPTS")"; printf '# One prompt per line — sent by the panel palette\n/ai-brain:wrap-up\n/ai-brain:save\n' > "$PROMPTS"; }
-command -v zellij >/dev/null || echo "⚠  zellij not found — Mac: brew install zellij ; Linux: binary in ~/.local/bin"
-command -v uv >/dev/null || echo "⚠  uv not found — https://docs.astral.sh/uv/ (needed by session-panel)"
-
 # ── Sessions consolidation: migrate registry + schedule jobs ─────────────────
 if [ -f "$HOME/.claude/session-migrate.yml" ]; then
   PATH="$BIN_DIR:$PATH" session-hub-sync || true

@@ -59,20 +59,7 @@ session-purge-headless --yes    # delete, then rescan
 
 ## Session manager
 
-`sessions` (or `cc <subject>`) attaches to a Zellij session `cc-<subject>` (`cc-sessions` outside any subject), started in the subject root. `Ctrl+Space` (or `Alt+s` when the terminal sends Ctrl+Space as NUL) toggles the sessions panel: a pinned floating pane (36 columns, docked left, `session-panel`, Textual app). Each session opens in its own Zellij tab; the panel follows you across tabs. Same tool on Mac and Nexus. Markers: `●` open in a tab, `⇢` replica behind its source, `⚠` diverged.
-
-| Key | Action |
-|-----|--------|
-| `Enter` | open the session in its tab (go to it if already open; migrate first when it lives on the other machine) |
-| `/` | filter |
-| `s` | cycle sort |
-| `r` | refresh |
-| `p` / `Ctrl+K` | command palette (not `Ctrl+P`: Zellij keeps it for pane mode): open any session, priority must / should / may / none, trash (twice to confirm), sort, filter, scope subject ↔ all, sync, replicate, favorite prompts |
-| `q` / `Ctrl+Space` | close the panel |
-
-Favorite prompts live in `${XDG_CONFIG_HOME:-~/.config}/session-panel/prompts.txt` (one per line; `install.sh` seeds it). The palette sends the chosen line to the session pane of the current tab.
-
-Requirements: `zellij` (Mac: `brew install zellij`; Nexus: binary in `~/.local/bin`) and `uv` (the launcher is a PEP 723 script with `textual` as dependency). `install.sh` installs `~/.config/zellij/config.kdl` only if none exists — an existing one without the panel keybind gets a warning and the block to paste — and warns when `zellij` or `uv` is missing. The panel refreshes every `SESSION_PANEL_REFRESH` seconds (default 30) without the costly `claude agents` read; `r` does a full refresh. `sessions --plain` (or a pipe) prints the table instead.
+Sessions are used from Claude Code's own **agent view** (`claude agents`, or `cc <subject>` for one subject): it groups sessions by state or directory (`Ctrl+S`), finds them by name with `Ctrl+F` or the `n:<text>` filter (put a marker such as `must` or an emoji in the name with `Ctrl+R` to filter on it), and pins with `Ctrl+T` (a pinned session keeps its process alive). `sessions` prints the cross-machine table; `session-open <id>` opens a local session (attach, or revive then attach); `session-migrate <id>` brings one over from the other machine.
 
 **Migration** (`session-migrate`) leaves a single live copy. Source reachable: the JSONL is pulled over ssh, the source copy goes to the trash. Source unreachable (Mac asleep, from Nexus): the replica kept by the Stop hook (`session-replicate`) is used instead; the stale source copy is trashed at its next scan.
 
@@ -99,9 +86,8 @@ Dans cet ordre, sur les deux machines sauf mention contraire :
    - `replica_to: nexus` — **Mac uniquement** ;
    - `claude_bin: <chemin absolu de claude>` — les deux machines (`command -v claude` dans un shell interactif).
 4. Relancer `bash install.sh` sur les deux machines — **après** l'étape 3 : c'est lui qui branche le Stop hook à partir de `replica_to`.
-5. Mac et Nexus : installer `zellij` et `uv` (Nexus : binaires dans `~/.local/bin`).
-6. cron (Nexus) et launchd (Mac) : rien à changer.
-7. Fermer les anciennes sessions tmux `cc-*` (`tmux kill-session -t cc-<sujet>`).
+5. cron (Nexus) et launchd (Mac) : rien à changer.
+6. Fermer les anciennes sessions tmux `cc-*` (`tmux kill-session -t cc-<sujet>`).
 
 ---
 
