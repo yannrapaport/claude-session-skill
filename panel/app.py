@@ -6,7 +6,10 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Provider, Hit, Hits, DiscoveryHit
+from textual import events
 from textual.containers import Vertical
+from textual.content import Content
+from textual.markup import escape
 from textual.widgets import Tree, Static, Input
 from textual.worker import get_current_worker
 from .model import Session, ViewState, group_by_subject
@@ -20,8 +23,10 @@ SCROLLBAR = 1
 _now = time.monotonic   # indirection so tests can move the clock
 
 
-def leaf_label(s: Session, width: int = 36) -> Text:
-    """badge · age · owner · title · markers, title shortened so markers always fit."""
+def leaf_label(s: Session, width: int = 36, is_open: bool = False) -> Text:
+    """badge · age · owner · title · markers, title shortened so markers always fit.
+
+    A session whose tab is open gets a cyan ▸ before a bold cyan title."""
     badge, style = BADGE.get(s.priority, ("  ", ""))
     marks = [m for m, on in (("●", s.running), ("⇢", s.lag), ("⚠", s.diverged)) if on]
     fixed = 2 + 1 + 3 + 1 + 1 + 1 + (1 + len(marks) if marks else 0)
@@ -33,8 +38,8 @@ def leaf_label(s: Session, width: int = 36) -> Text:
     t.append(badge, style=style)
     t.append(f" {(s.age or '')[:3]:>3} ", style="dim")
     t.append((s.owner or "?")[:1], style="dim italic")
-    t.append(" ")
-    t.append(title, style="bold" if s.running else "")
+    t.append("▸" if is_open else " ", style="bold cyan")
+    t.append(title, style="bold cyan" if is_open else "bold" if s.running else "")
     if marks:
         t.append(" ")
         for m in marks:
@@ -57,39 +62,53 @@ def subject_label(subject: str, items: list[Session]) -> Text:
     return t
 
 
+def _highlight(matcher, title: str) -> Content:
+    """Matcher.highlight() parses markup; highlight the plain title instead."""
+    content = Content(title)
+    _, offsets = matcher.fuzzy_search.match(matcher.query, title)
+    for o in offsets:
+        if not title[o].isspace():
+            content = content.stylize(matcher.match_style, o, o + 1)
+    return content
+
+
 class _ListProvider(Provider):
     """Provider over a list of (title, callback, help) — same discover/search for all three sources."""
 
     def _items(self):
         return []
 
+    # Titles and help carry user data (session titles, prompt lines): never let Textual parse them as markup.
     async def discover(self) -> Hits:
         for title, cb, help_ in self._items():
-            yield DiscoveryHit(title, cb, text=title, help=help_)
+            yield DiscoveryHit(Content(title), cb, text=title, help=escape(help_) if help_ else None)
 
     async def search(self, query: str) -> Hits:
         m = self.matcher(query)
         for title, cb, help_ in self._items():
             if (score := m.match(title)) > 0:
-                yield Hit(score, m.highlight(title), cb, text=title, help=help_)
+                yield Hit(score, _highlight(m, title), cb, text=title, help=escape(help_) if help_ else None)
 
 
 class SessionCommands(_ListProvider):
-    """Per session: open, migrate here, priority, trash."""
+    """Open any session; priority / trash / migrate apply to the selected one."""
 
     def _items(self):
         app = self.app
-        this = getattr(app.acts, "this", None)
         for s in app.sessions:
-            yield f"Ouvrir {s.title}", partial(app.do_open, s), "Bascule vers son onglet ou le crée"
-            if this and s.owner and s.owner != this:
-                yield f"Migrer ici · {s.title}", partial(app.do_open, s), f"Rapatrie depuis {s.owner} puis ouvre"
-            for lvl in ("must", "should", "may", "aucune"):
-                yield f"Priorité {lvl} · {s.title}", partial(app.do_priority, s, "none" if lvl == "aucune" else lvl), None
-            if app.trash_armed_for(s):
-                yield f"Confirmer la corbeille de {s.title}", partial(app.request_trash, s), "Définitif côté index"
-            else:
-                yield f"Corbeille · {s.title}", partial(app.request_trash, s), "Deux fois pour confirmer"
+            yield f"Ouvrir {s.title}", partial(app.do_open, s), "Onglet existant ou nouveau"
+        s = app.selected_session()
+        if s is None:
+            return
+        this = getattr(app.acts, "this", None)
+        if this and s.owner and s.owner != this:
+            yield "Migrer ici", partial(app.do_open, s), f"{s.title} — depuis {s.owner}"
+        for lvl in ("must", "should", "may", "aucune"):
+            yield f"Priorité {lvl}", partial(app.do_priority, s, "none" if lvl == "aucune" else lvl), s.title
+        if app.trash_armed_for(s):
+            yield "Confirmer la corbeille", partial(app.request_trash, s), s.title
+        else:
+            yield "Corbeille", partial(app.request_trash, s), f"{s.title} — deux fois pour confirmer"
 
 
 class GlobalCommands(_ListProvider):
@@ -107,12 +126,27 @@ class GlobalCommands(_ListProvider):
 class PromptCommands(_ListProvider):
     def _items(self):
         app = self.app
-        try:
-            lines = app.acts.prompts()
-        except Exception:
-            lines = []
-        for line in lines:
+        for line in app.prompt_lines:
             yield f"Prompt : {line}", partial(app.do_prompt, line), "Envoyé au volet de session de l'onglet"
+
+
+class SessionTree(Tree):
+    """Mouse: a single click only moves the cursor (and folds a subject); a double click selects."""
+
+    async def _on_click(self, event: events.Click) -> None:
+        event.prevent_default()   # Textual also dispatches Tree._on_click (MRO) unless prevented
+        async with self.lock:
+            meta = event.style.meta
+            if "line" not in meta:
+                return
+            node = self.get_node_at_line(meta["line"])
+            if meta.get("toggle", False):
+                if node is not None:
+                    self._toggle_node(node)
+                return
+            self.cursor_line = meta["line"]
+            if event.chain >= 2 or (node is not None and node.allow_expand):
+                await self.run_action("select_cursor")
 
 
 class SessionPanel(App):
@@ -155,19 +189,28 @@ class SessionPanel(App):
         self._pending_trash: tuple[str, float] | None = None
         self._text = ""
         self._collapsed: set[str] = set()
+        self._open_ids: set[str] = set()
+        self.prompt_lines: list[str] = []
+        self._busy = False
+        self._arm_msg = ""
 
     # ── layout ──
     def compose(self) -> ComposeResult:
-        yield Static(id="top")
-        yield Input(placeholder="filtrer…", id="filter")
+        # widgets are kept by reference: when the palette is up, app.query_one() would search its screen
+        self._top, self._filter = Static(id="top"), Input(placeholder="filtrer…", id="filter")
+        yield self._top
+        yield self._filter
         with Vertical():
-            tree: Tree = Tree("Sessions", id="tree")
+            tree: Tree = SessionTree("Sessions", id="tree")
+            self._tree = tree
             tree.show_root = False
             tree.guide_depth = 2
             tree.auto_expand = True
             yield tree
-            yield Static(id="empty")
-        yield Static(id="status")
+            self._empty = Static(id="empty")
+            yield self._empty
+        self._status = Static(id="status")
+        yield self._status
         yield Static(self._keys_hint(), id="keys")
 
     @staticmethod
@@ -181,9 +224,9 @@ class SessionPanel(App):
         return t
 
     def on_mount(self) -> None:
-        self.query_one("#filter").display = False
-        self.query_one("#empty").display = False
-        self.query_one("#tree").focus()
+        self._filter.display = False
+        self._empty.display = False
+        self._tree.focus()
         self._render_status()
         self.refresh_sessions()
         self.set_interval(30, self.refresh_sessions)
@@ -201,15 +244,29 @@ class SessionPanel(App):
         def job():
             try:
                 sessions, err = self.load(self.view)
+                sessions = list(sessions or [])
             except Exception as e:  # load must never take the panel down
                 sessions, err = [], f"Chargement impossible : {e}"
+            open_ids, prompts = self._side_info()
             if not get_current_worker().is_cancelled:
-                self._from_thread(self._apply, list(sessions or []), err)
+                self._from_thread(self._apply, sessions, err, open_ids, prompts)
         self.run_worker(job, thread=True, group="load", exclusive=True, exit_on_error=False)
 
-    def _apply(self, sessions: list[Session], err: str | None) -> None:
+    def _side_info(self) -> tuple[set[str], list[str]]:
+        """Open-tab ids and prompt lines, read off the UI thread with the rows."""
+        try:
+            open_ids = set(getattr(self.acts, "open_ids", lambda: set())() or ())
+        except Exception:
+            open_ids = set()
+        try:
+            prompts = list(self.acts.prompts() or [])
+        except Exception:
+            prompts = []
+        return open_ids, prompts
+
+    def _apply(self, sessions: list[Session], err: str | None, open_ids=frozenset(), prompts=()) -> None:
         self.sessions, self._error, self._loaded, self._loading = sessions, err, True, False
-        self._pending_trash = None   # arming never survives a refresh
+        self._open_ids, self.prompt_lines = set(open_ids), list(prompts)
         self._rebuild()
 
     def _from_thread(self, fn, *args) -> None:
@@ -226,7 +283,7 @@ class SessionPanel(App):
                 if q in (s.title or "").lower() or q in (s.proj or "").lower() or q in (s.subject or "").lower()]
 
     def _rebuild(self) -> None:
-        tree: Tree = self.query_one("#tree", Tree)
+        tree = self._tree
         keep = self.selected_session()
         keep_id = keep.id if keep else None
         keep_subject = None
@@ -241,7 +298,7 @@ class SessionPanel(App):
             if subject == keep_subject:
                 target = node
             for s in items:
-                leaf = node.add_leaf(leaf_label(s, width), data=s)
+                leaf = node.add_leaf(leaf_label(s, width, s.id in self._open_ids), data=s)
                 if s.id == keep_id:
                     target = leaf
         if target is not None:
@@ -249,10 +306,10 @@ class SessionPanel(App):
                 target.parent.expand()
             _ = tree._tree_lines  # force line layout so the node has a line number
             tree.move_cursor(target)
-        empty = self.query_one("#empty", Static)
+        empty = self._empty
         if not visible and not self._error:
-            empty.update(f"Aucune session ne correspond à « {self._text} »." if self.sessions
-                         else "Aucune session ici.\n\nr pour rafraîchir · ^P pour changer de filtre")
+            empty.update(Text(f"Aucune session ne correspond à « {self._text} »." if self.sessions
+                              else "Aucune session ici.\n\nr pour rafraîchir · ^P pour changer de filtre"))
         empty.display = not visible and not self._error
         tree.display = bool(visible) or bool(self._error)
         self._render_status()
@@ -276,13 +333,13 @@ class SessionPanel(App):
         return t
 
     def _render_status(self) -> None:
-        self.query_one("#top", Static).update(self._summary())
+        self._top.update(self._summary())
         line = Text(overflow="fold")
         if self._error:
             line.append("⚠ " + self._error, style="bold red")
         elif self._message[0]:
             line.append(*self._message)
-        status = self.query_one("#status", Static)
+        status = self._status
         status.update(line)
         status.display = bool(line.plain)
 
@@ -295,14 +352,14 @@ class SessionPanel(App):
     # ── public helpers (tests + palette) ──
     def tree_labels(self) -> list[str]:
         out: list[str] = []
-        for node in self.query_one("#tree", Tree).root.children:
+        for node in self._tree.root.children:
             out.append(node.label.plain)
             out.extend(c.label.plain for c in node.children)
         return out
 
     def status_text(self) -> str:
         parts = [self._summary().plain]
-        empty = self.query_one("#empty", Static)
+        empty = self._empty
         if empty.display:
             parts.append(str(empty.render()))
         if self._error:
@@ -312,7 +369,7 @@ class SessionPanel(App):
         return "\n".join(parts)
 
     async def select_session(self, sid: str) -> bool:
-        tree = self.query_one("#tree", Tree)
+        tree = self._tree
         for node in tree.root.children:
             for leaf in node.children:
                 if isinstance(leaf.data, Session) and leaf.data.id == sid:
@@ -324,7 +381,7 @@ class SessionPanel(App):
         return False
 
     def selected_session(self) -> Session | None:
-        node = self.query_one("#tree", Tree).cursor_node
+        node = self._tree.cursor_node
         return node.data if node is not None and isinstance(node.data, Session) else None
 
     async def palette_titles(self) -> list[str]:
@@ -339,7 +396,12 @@ class SessionPanel(App):
         return bool(p and p[0] == s.id and _now() - p[1] <= ARM_SECONDS)
 
     # ── actions (slow ones run in thread workers) ──
-    def _bg(self, pending: str, fn, *args) -> None:
+    def _bg(self, pending: str, fn, *args) -> bool:
+        """Run one action at a time; a second request while one runs is refused."""
+        if self._busy:
+            self.notify_status("Une action est déjà en cours — patiente un instant.", "yellow")
+            return False
+        self._busy = True
         self.notify_status(pending, "dim")
 
         def job():
@@ -349,8 +411,10 @@ class SessionPanel(App):
                 msg = f"Échec : {e}"
             self._from_thread(self._after_action, str(msg or "ok"))
         self.run_worker(job, thread=True, group="action", exit_on_error=False)
+        return True
 
     def _after_action(self, msg: str) -> None:
+        self._busy = False
         self.notify_status(msg)
         self.refresh_sessions()
 
@@ -362,11 +426,24 @@ class SessionPanel(App):
 
     def request_trash(self, s: Session) -> None:
         if self.trash_armed_for(s):
-            self._pending_trash = None
-            self._bg(f"Corbeille · {s.title}…", self.acts.trash, s)
+            if self._bg(f"Corbeille · {s.title}…", self.acts.trash, s):
+                self._pending_trash = None
         else:
             self._pending_trash = (s.id, _now())
-            self.notify_status(f"Corbeille de « {s.title} » : encore une fois pour confirmer (10 s)", "bold yellow")
+            self._arm_msg = f"Corbeille de « {s.title} » : encore une fois pour confirmer (10 s)"
+            self.notify_status(self._arm_msg, "bold yellow")
+            self.set_timer(ARM_SECONDS + 0.1, self.expire_trash)
+
+    def expire_trash(self) -> None:
+        """Drop an expired arming and its yellow prompt."""
+        p = self._pending_trash
+        if p and _now() - p[1] <= ARM_SECONDS:
+            return
+        self._pending_trash = None
+        if self._arm_msg and self._message[0] == self._arm_msg:
+            self._message = ("", "")
+            self._render_status()
+        self._arm_msg = ""
 
     def do_sync(self) -> None:
         self._bg("Synchronisation de l'index…", self.acts.sync)
@@ -417,19 +494,19 @@ class SessionPanel(App):
         self._rebuild()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.query_one("#tree").focus()
+        self._tree.focus()
 
     def action_open(self) -> None:
         if (s := self.selected_session()) is not None:
             self.do_open(s)
 
     def action_filter(self) -> None:
-        box = self.query_one("#filter", Input)
+        box = self._filter
         box.display = True
         box.focus()
 
     def action_clear(self) -> None:
-        box = self.query_one("#filter", Input)
+        box = self._filter
         if box.value or box.display:
             box.value = ""
             box.display = False
@@ -438,7 +515,7 @@ class SessionPanel(App):
         self._pending_trash = None
         self._message = ("", "")
         self._render_status()
-        self.query_one("#tree").focus()
+        self._tree.focus()
 
     def action_reload(self) -> None:
         self.refresh_sessions()

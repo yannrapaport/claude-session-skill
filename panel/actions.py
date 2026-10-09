@@ -77,6 +77,14 @@ class Actions:
             return f"→ {name}{note} (panneau non déplacé : {e})"
         return f"→ {name}{note}"
 
+    def open_ids(self) -> set[str]:
+        """Ids of sessions whose recorded tab still exists. Never raises (empty set)."""
+        try:
+            existing = set(self.zj.tab_names())
+            return {k for k, v in self._tabs().items() if v in existing}
+        except Exception:
+            return set()
+
     def move_panel_to_current_tab(self) -> None:
         # open the new panel first: a failure must never leave the user without one
         tab = self.zj.current_tab_id()

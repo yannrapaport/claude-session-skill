@@ -129,3 +129,15 @@ def test_save_failure_still_moves_panel(mk, monkeypatch):
 def test_script_nonzero_exit_message(mk):
     def run(cmd, **kw): return subprocess.CompletedProcess(cmd, 2, "out\n", "bad thing\n")
     assert mk(FakeZ(), runner=run).sync() == "Échec : bad thing"
+
+
+def test_open_ids(mk):
+    z = FakeZ(); a = mk(z)
+    assert a.open_ids() == set()
+    a.open(S())
+    assert a.open_ids() == {"aaaa1111-0000"}
+    z._tabs = ["Tab #1"]                      # tab closed by hand
+    assert a.open_ids() == set()
+    class Broken(FakeZ):
+        def tab_names(self): raise RuntimeError("zellij down")
+    assert mk(Broken()).open_ids() == set()

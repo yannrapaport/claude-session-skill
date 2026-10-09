@@ -11,13 +11,13 @@ def S(i, subj, title, **kw):
 
 
 class FakeActions:
-    def __init__(self): self.calls = []
+    def __init__(self): self.calls = []; self.prompt_reads = 0
     def open(self, s): self.calls.append(("open", s.id)); return "→ ok"
     def set_priority(self, s, lvl): self.calls.append(("prio", s.id, lvl)); return "ok"
     def trash(self, s): self.calls.append(("trash", s.id)); return "ok"
     def sync(self): self.calls.append(("sync",)); return "ok"
     def replicate(self): self.calls.append(("replicate",)); return "ok"
-    def prompts(self): return ["/ai-brain:wrap-up"]
+    def prompts(self): self.prompt_reads += 1; return ["/ai-brain:wrap-up"]
     def send_prompt(self, t): self.calls.append(("prompt", t)); return "ok"
 
 
@@ -62,9 +62,13 @@ async def test_palette_commands_present():
     async with app.run_test(size=(80, 30)) as pilot:
         await settle(app, pilot)
         titles = await app.palette_titles()
-        for t in ("Ouvrir Refonte", "Priorité must · Bizdev", "Corbeille · Sessions", "Tri : projet",
+        assert "Priorité must" not in titles and "Corbeille" not in titles   # nothing selected yet
+        await app.select_session("c3")
+        titles = await app.palette_titles()
+        for t in ("Ouvrir Refonte", "Ouvrir Sessions", "Priorité must", "Priorité aucune", "Corbeille", "Tri : projet",
                   "Filtre : Mac", "Synchroniser l'index", "Répliquer maintenant", "Prompt : /ai-brain:wrap-up"):
             assert any(t in x for x in titles), t
+        assert not any("·" in t and "Priorité" in t for t in titles)   # short titles, session in the help
 
 
 @pytest.mark.asyncio
@@ -74,7 +78,8 @@ async def test_trash_needs_confirmation():
         await settle(app, pilot)
         app.request_trash(SESS[2]); await settle(app, pilot)
         assert ("trash", "c3") not in acts.calls
-        assert any("Confirmer la corbeille de Bizdev" in t for t in await app.palette_titles())
+        await app.select_session("c3")
+        assert "Confirmer la corbeille" in await app.palette_titles()
         app.request_trash(SESS[2]); await settle(app, pilot)
         assert ("trash", "c3") in acts.calls
 
@@ -150,3 +155,116 @@ async def test_action_failure_is_reported_not_raised():
         await settle(app, pilot)
         app.do_sync(); await settle(app, pilot)
         assert "kaput" in app.status_text()
+
+
+# ── review fixes ──
+
+@pytest.mark.asyncio
+async def test_markup_in_user_text_does_not_crash_palette():
+    class A(FakeActions):
+        def prompts(self): return ["[b]x"]
+    sess = [S("d4", "tpg", "bad [/] title")]
+    app = SessionPanel(load=lambda v: (sess, None), actions=A(), view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        await app.select_session("d4")
+        titles = await app.palette_titles()
+        assert "Ouvrir bad [/] title" in titles and "Prompt : [b]x" in titles
+        await pilot.press("ctrl+p"); await pilot.pause(0.3)
+        await pilot.press(*"bad"); await pilot.pause(0.3)
+        await pilot.press("backspace", "backspace", "backspace", "x"); await pilot.pause(0.3)
+        await pilot.press("escape"); await pilot.pause()
+        assert app.is_running
+
+
+@pytest.mark.asyncio
+async def test_markup_in_filter_text_does_not_crash():
+    app = SessionPanel(load=lambda v: (SESS, None), actions=FakeActions(), view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("slash")
+        app._filter.value = "[/]"; await pilot.pause()
+        assert app.is_running and "[/]" in app.status_text()
+
+
+@pytest.mark.asyncio
+async def test_actions_are_serialised():
+    import threading
+    gate = threading.Event()
+    class Slow(FakeActions):
+        def open(self, s):
+            self.calls.append(("open", s.id)); gate.wait(5); return "→ ok"
+    acts = Slow()
+    app = SessionPanel(load=lambda v: (SESS, None), actions=acts, view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        await app.select_session("a1")
+        await pilot.press("enter"); await pilot.pause()
+        await pilot.press("enter"); await pilot.pause()
+        assert "déjà en cours" in app.status_text()
+        gate.set(); await settle(app, pilot)
+        assert acts.calls.count(("open", "a1")) == 1
+        await pilot.press("enter"); await settle(app, pilot)   # free again once done
+        assert acts.calls.count(("open", "a1")) == 2
+
+
+@pytest.mark.asyncio
+async def test_single_click_selects_double_click_opens():
+    acts = FakeActions()
+    app = SessionPanel(load=lambda v: (SESS, None), actions=acts, view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.click("#tree", offset=(12, 1)); await settle(app, pilot)
+        assert app.selected_session().id == "a1" and not any(c[0] == "open" for c in acts.calls)
+        await pilot.double_click("#tree", offset=(12, 1)); await settle(app, pilot)
+        assert ("open", "a1") in acts.calls
+
+
+@pytest.mark.asyncio
+async def test_trash_arming_survives_refresh_and_expiry_clears_message(monkeypatch):
+    import panel.app as mod
+    now = [1000.0]
+    monkeypatch.setattr(mod, "_now", lambda: now[0])
+    acts = FakeActions(); app = SessionPanel(load=lambda v: (SESS, None), actions=acts, view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        app.request_trash(SESS[2])
+        app.refresh_sessions(); await settle(app, pilot)
+        app.request_trash(SESS[2]); await settle(app, pilot)
+        assert ("trash", "c3") in acts.calls
+        app.request_trash(SESS[1]); assert "encore une fois" in app.status_text()
+        now[0] += 11; app.expire_trash()
+        assert "encore une fois" not in app.status_text() and not app.trash_armed_for(SESS[1])
+
+
+@pytest.mark.asyncio
+async def test_open_tab_is_highlighted():
+    class A(FakeActions):
+        def open_ids(self): return {"a1"}
+    app = SessionPanel(load=lambda v: (SESS, None), actions=A(), view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        tpg = app._tree.root.children[0]
+        refonte, bizdev = tpg.children[0].label, tpg.children[1].label
+        assert "▸Refonte" in refonte.plain and "▸" not in bizdev.plain
+        assert any("cyan" in str(sp.style) for sp in refonte.spans if refonte.plain[sp.start:sp.end] == "Refonte")
+
+
+@pytest.mark.asyncio
+async def test_bad_load_result_ends_loading_with_error():
+    app = SessionPanel(load=lambda v: (5, None), actions=FakeActions(), view=ViewState())
+    async with app.run_test(size=(36, 20)) as pilot:
+        await settle(app, pilot)
+        assert "Chargement impossible" in app.status_text() and "↻" not in app.status_text()
+
+
+@pytest.mark.asyncio
+async def test_prompts_read_per_refresh_not_per_keystroke():
+    acts = FakeActions()
+    app = SessionPanel(load=lambda v: (SESS, None), actions=acts, view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        reads = acts.prompt_reads
+        for _ in range(5):
+            await app.palette_titles()
+        assert acts.prompt_reads == reads == 1
