@@ -71,5 +71,6 @@ and stop.
 ### 4. Open it
 A skill cannot switch the running session. `session-open "$SID"` (attach, or
 revive in its own cwd, then attach) replaces the terminal it runs in, so do
-not run it from the Bash tool; once migrated, hand it to the panel: tell the user to pick the session in `sessions`
-(or `cc <subject>`), where the panel opens it in its own Zellij tab.
+not run it from the Bash tool; once migrated, tell the user to open it from the
+agent view (`cc <subject>`, or `claude agents`) or by running `session-open <id>`
+in a terminal.
