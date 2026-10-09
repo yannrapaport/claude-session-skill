@@ -10,11 +10,11 @@ set -euo pipefail
 # pipe (the /session:list skill runs us from Bash), keeps the table below.
 if [ "${1:-}" = --plain ]; then
   shift
+elif [ -t 1 ] && [ -n "${ZELLIJ:-}" ]; then
+  # Checked before looking for zellij itself; a pipe/--plain (the table) is unaffected.
+  echo "Déjà dans Zellij — détache d'abord (Ctrl+O puis d) ou change de session avec Ctrl+O puis w." >&2
+  exit 1
 elif [ -t 1 ] && command -v zellij >/dev/null; then
-  if [ -n "${ZELLIJ:-}" ]; then
-    echo "Déjà dans Zellij — détache d'abord (Ctrl+O puis d) ou change de session avec Ctrl+O puis w." >&2
-    exit 1
-  fi
   SUBJ=$(session-subject-of "$PWD" | cut -f1 || true)
   ROOT=$(session-subject-roots 2>/dev/null | awk -F'\t' -v s="$SUBJ" 's != "" && $1 == s {print $2; exit}' || true)
   [ -n "$ROOT" ] && [ -d "$ROOT" ] && cd "$ROOT"

@@ -19,8 +19,8 @@ from panel.app import SessionPanel
 
 def pause() -> None:
     try:
-        pause()
-    except EOFError:
+        input("⏎ ")
+    except (EOFError, KeyboardInterrupt):
         pass
 
 

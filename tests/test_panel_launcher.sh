@@ -28,9 +28,25 @@ else
   rm -rf "$_L"
 fi
 
-# sessions: refuses to nest inside Zellij (script(1) gives it a tty)
+# error path: no Zellij session → French message, non-zero exit, no traceback (stdin at EOF)
+_E=$(mktemp -d); mkdir "$_E/bin"; cp "$SCRIPT_DIR/panel/zellij-stub" "$_E/bin/zellij"; chmod +x "$_E/bin/zellij"
+if command -v uv >/dev/null; then
+  rc=0; _o=$(env -u ZELLIJ -u ZELLIJ_SESSION_NAME PATH="$_E/bin:$PATH" ZJ_LOG="$_E/log" \
+    uv run --quiet --script "$SCRIPT_DIR/../bin/session-panel" </dev/null 2>&1) || rc=$?
+  assert_eq "launcher error path: non-zero exit" "1" "$rc"
+  assert_eq "launcher error path: French message, no traceback" "yes" \
+    "$(case "$_o" in *Traceback*) echo no ;; *"Hors d'une session Zellij"*) echo yes ;; *) echo no ;; esac)"
+fi
+rm -rf "$_E"
+
+# sessions: refuses to nest inside Zellij (needs a tty: script(1), flags differ per OS)
 if command -v script >/dev/null; then
-  _o=$(ZELLIJ=0 script -q /dev/null bash -c "sessions" 2>&1 </dev/null || true)
+  case "$(uname -s)" in
+    Darwin) _o=$(ZELLIJ=0 script -q /dev/null sessions 2>&1 </dev/null || true) ;;
+    *)      _o=$(ZELLIJ=0 script -qc sessions /dev/null 2>&1 </dev/null || true) ;;
+  esac
   case "$_o" in *"Déjà dans Zellij"*) _r=ok ;; *) _r="$_o" ;; esac
   assert_eq "sessions: refuses to nest in Zellij" "ok" "$_r"
+else
+  assert_eq "sessions nesting (skipped: script absent)" "ok" "ok"
 fi
