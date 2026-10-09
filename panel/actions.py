@@ -6,6 +6,7 @@ from .model import Session
 
 ID_RE = re.compile(r"[0-9a-fA-F][0-9a-fA-F-]*")
 NAME_MAX = 24
+MACHINE_UNKNOWN = "machine inconnue — ouverture désactivée (vérifie ~/.claude/session-migrate.yml)"
 
 
 def _valid(sid: str) -> str:
@@ -15,19 +16,38 @@ def _valid(sid: str) -> str:
 
 
 class Actions:
-    def __init__(self, zj, this_machine: str, state_dir: Path, runner=subprocess.run, cwd_for=None):
+    def __init__(self, zj, this_machine: str, state_dir: Path, runner=subprocess.run, cwd_for=None,
+                 session: str | None = None):
         self.zj, self.this, self.state_dir, self.runner = zj, this_machine, Path(state_dir), runner
         self.cwd_for = cwd_for or default_cwd_for
+        self.session = session if session is not None else os.environ.get("ZELLIJ_SESSION_NAME", "")
 
-    # ── tabs registry ──
+    # ── tabs registry: one file per Zellij session (tab ids and names are per session) ──
+    # {session id: {"tab_id": int | None, "name": str}}
     def _tabs_file(self) -> Path:
-        return self.state_dir / "tabs.json"
+        key = re.sub(r"[^A-Za-z0-9_-]", "_", self.session) or "default"
+        return self.state_dir / f"tabs-{key}.json"
 
     def _tabs(self) -> dict:
         try:
-            return json.loads(self._tabs_file().read_text())
+            data = json.loads(self._tabs_file().read_text())
         except (OSError, ValueError):
             return {}
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if isinstance(v, dict) and isinstance(v.get("name"), str)}
+
+    def _live_tabs(self) -> dict:
+        """{tab_id: name} of the tabs open in this Zellij session."""
+        return {t["tab_id"]: t["name"] for t in self.zj.tabs()}
+
+    @staticmethod
+    def _alive(entry: dict, live: dict) -> bool:
+        """Our tab still exists: same id, same name (renamed or closed by hand → no longer ours)."""
+        tid = entry.get("tab_id")
+        if tid is None:   # new-tab printed no id: fall back to the name
+            return entry["name"] in live.values()
+        return live.get(tid) == entry["name"]
 
     def _save_tabs(self, data: dict) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -53,18 +73,26 @@ class Actions:
 
     # ── actions ──
     def open(self, s: Session) -> str:
+        if not self.this:
+            return f"Échec : {MACHINE_UNKNOWN}"
         saved = True
         try:
-            existing = self.zj.tab_names()
-            tabs = {k: v for k, v in self._tabs().items() if v in existing}  # prune closed tabs
-            name = tabs.get(s.id)
-            if name:
-                self.zj.go_to_tab(name)
+            live = self._live_tabs()
+            known = self._tabs()
+            tabs = {k: v for k, v in known.items() if self._alive(v, live)}  # prune closed/renamed tabs
+            entry = tabs.get(s.id)
+            if entry:
+                name = entry["name"]
+                if entry.get("tab_id") is None:
+                    self.zj.go_to_tab(name)
+                else:
+                    self.zj.go_to_tab_id(entry["tab_id"])
             else:
-                taken = list(existing) + list(tabs.values())
+                taken = list(live.values()) + [v["name"] for v in tabs.values()]
                 name = self.tab_name_for(s, taken)
-                self.zj.new_tab(name, self.cwd_for(s), self.command_for(s))
-                tabs[s.id] = name
+                tid = self.zj.new_tab(name, self.cwd_for(s), self.command_for(s))
+                tabs[s.id] = {"tab_id": tid, "name": name}
+            if tabs != known:
                 try:
                     self._save_tabs(tabs)
                 except OSError:
@@ -81,8 +109,8 @@ class Actions:
     def open_ids(self) -> set[str]:
         """Ids of sessions whose recorded tab still exists. Never raises (empty set)."""
         try:
-            existing = set(self.zj.tab_names())
-            return {k for k, v in self._tabs().items() if v in existing}
+            live = self._live_tabs()
+            return {k for k, v in self._tabs().items() if self._alive(v, live)}
         except Exception:
             return set()
 

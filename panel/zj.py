@@ -63,8 +63,16 @@ class Zellij:
     def go_to_tab(self, name: str) -> None:
         self._run("go-to-tab-name", "--", name)
 
-    def new_tab(self, name: str, cwd: str, command: list[str]) -> None:
-        self._run("new-tab", f"--name={name}", f"--cwd={cwd}", "--", *command)
+    def go_to_tab_id(self, tab_id: int) -> None:
+        self._run("go-to-tab-by-id", str(tab_id))
+
+    def new_tab(self, name: str, cwd: str, command: list[str]) -> int | None:
+        """Open a tab whose pane closes with its command; return the new tab's stable id (None if unreadable)."""
+        out = self._run("new-tab", f"--name={name}", f"--cwd={cwd}", "--close-on-exit", "--", *command)
+        try:
+            return int(out.strip())
+        except ValueError:
+            return None
 
     def panel_panes(self) -> list[dict]:
         return [p for p in self.panes() if self._is_panel(p)]

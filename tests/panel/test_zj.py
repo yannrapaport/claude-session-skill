@@ -41,10 +41,11 @@ def test_writes(zj):
     assert "action write --pane-id terminal_0 13" in L
 
 def test_new_tab_and_panel(zj):
-    zj.new_tab("Refonte", "/tmp", ["claude", "--resume", "abc"])
-    zj.open_panel_in_tab(1, ["panel-cmd"])
+    assert zj.new_tab("Refonte", "/tmp", ["claude", "--resume", "abc"]) == 7   # stub prints the tab id
+    zj.open_panel_in_tab(1, ["panel-cmd"]); zj.go_to_tab_id(4)
     L = log(zj)
-    assert "action new-tab --name=Refonte --cwd=/tmp -- claude --resume abc" in L
+    assert "action new-tab --name=Refonte --cwd=/tmp --close-on-exit -- claude --resume abc" in L
+    assert "action go-to-tab-by-id 4" in L
     assert "action new-pane --floating --pinned true --close-on-exit --name sessions-panel --tab-id 1 -- panel-cmd" in L
 
 def test_unavailable(monkeypatch, tmp_path):
@@ -108,4 +109,8 @@ def test_panel_focused_falls_back_to_first_nonfloating(zj):
 
 def test_new_tab_dash_name(zj):
     zj.new_tab("-dash tab", "/tmp", ["claude"])
-    assert "action new-tab --name=-dash tab --cwd=/tmp -- claude" in log(zj)
+    assert "action new-tab --name=-dash tab --cwd=/tmp --close-on-exit -- claude" in log(zj)
+
+def test_new_tab_id_unparsable_is_none(zj, monkeypatch):
+    monkeypatch.setenv("ZJ_NEW_TAB_ID", "")
+    assert zj.new_tab("x", "/tmp", ["claude"]) is None

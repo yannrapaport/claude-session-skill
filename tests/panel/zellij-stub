@@ -6,5 +6,6 @@ case "$args" in
   *" list-panes "*) cat "${ZJ_PANES:?}" ;;
   *" list-tabs "*)  cat "${ZJ_TABS:?}" ;;
   *" new-pane "*)   echo "terminal_${ZJ_NEW_PANE_ID:-9}" ;;
+  *" new-tab "*)    echo "${ZJ_NEW_TAB_ID-7}" ;;
 esac
 exit "${ZJ_RC:-0}"
