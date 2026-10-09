@@ -67,7 +67,7 @@ session-purge-headless --yes    # delete, then rescan
 | `/` | filter |
 | `s` | cycle sort |
 | `r` | refresh |
-| `Ctrl+P` | command palette: open any session, priority must / should / may / none, trash (twice to confirm), sort, filter, scope subject ↔ all, sync, replicate, favorite prompts |
+| `p` / `Ctrl+K` | command palette (not `Ctrl+P`: Zellij keeps it for pane mode): open any session, priority must / should / may / none, trash (twice to confirm), sort, filter, scope subject ↔ all, sync, replicate, favorite prompts |
 | `q` / `Ctrl+Space` | close the panel |
 
 Favorite prompts live in `${XDG_CONFIG_HOME:-~/.config}/session-panel/prompts.txt` (one per line; `install.sh` seeds it). The palette sends the chosen line to the session pane of the current tab.

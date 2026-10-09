@@ -167,12 +167,17 @@ class SessionPanel(App):
     CommandPalette CommandInput { padding: 0 1; }
     """
     COMMANDS = {SessionCommands, GlobalCommands, PromptCommands}
+    # Zellij binds Ctrl p (pane mode): Textual's default palette key never arrives. Declaring our own
+    # command_palette bindings replaces it (Textual only adds the default when none is declared).
+    COMMAND_PALETTE_BINDING = "ctrl+k"
     BINDINGS = [
         Binding("enter", "open", "Ouvrir"),
         Binding("slash", "filter", "Filtrer"),
         Binding("escape", "clear", "Effacer"),
         Binding("r", "reload", "Rafraîchir"),
         Binding("s", "cycle_sort", "Tri"),
+        Binding("p", "command_palette", "Menu"),
+        Binding("ctrl+k", "command_palette", "Menu", show=False, priority=True),
         Binding("q", "quit", "Fermer"),
         Binding("ctrl+space,ctrl+@", "quit", "Fermer", show=False),
     ]
@@ -216,7 +221,7 @@ class SessionPanel(App):
     @staticmethod
     def _keys_hint() -> Text:
         t = Text(no_wrap=True, overflow="ellipsis")
-        for i, (k, label) in enumerate((("⏎", "ouvrir"), ("/", "filtre"), ("^P", "menu"), ("q", "✕"))):
+        for i, (k, label) in enumerate((("⏎", "ouvrir"), ("/", "filtre"), ("p", "menu"), ("q", "✕"))):
             if i:
                 t.append("  ")
             t.append(k, style="bold")
@@ -311,7 +316,7 @@ class SessionPanel(App):
         empty = self._empty
         if not visible and not self._error:
             empty.update(Text(f"Aucune session ne correspond à « {self._text} »." if self.sessions
-                              else "Aucune session ici.\n\nr pour rafraîchir · ^P pour changer de filtre"))
+                              else "Aucune session ici.\n\nr pour rafraîchir · p pour changer de filtre"))
         empty.display = not visible and not self._error
         tree.display = bool(visible) or bool(self._error)
         self._render_status()

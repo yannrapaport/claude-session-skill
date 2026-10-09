@@ -170,7 +170,7 @@ async def test_markup_in_user_text_does_not_crash_palette():
         await app.select_session("d4")
         titles = await app.palette_titles()
         assert "Ouvrir bad [/] title" in titles and "Prompt : [b]x" in titles
-        await pilot.press("ctrl+p"); await pilot.pause(0.3)
+        await pilot.press("ctrl+k"); await pilot.pause(0.3)
         await pilot.press(*"bad"); await pilot.pause(0.3)
         await pilot.press("backspace", "backspace", "backspace", "x"); await pilot.pause(0.3)
         await pilot.press("escape"); await pilot.pause()
@@ -277,3 +277,27 @@ async def test_unknown_machine_is_flagged():
     async with app.run_test(size=(36, 30)) as pilot:
         await settle(app, pilot)
         assert "machine inconnue" in app.status_text()
+
+
+# ── final fix wave ──
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["p", "ctrl+k"])
+async def test_palette_keys_reachable_inside_zellij(key):
+    """Zellij eats Ctrl p (pane mode): the palette opens on p and Ctrl k."""
+    from textual.command import CommandPalette
+    app = SessionPanel(load=lambda v: (SESS, None), actions=FakeActions(), view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press(key); await pilot.pause(0.2)
+        assert isinstance(app.screen, CommandPalette)
+        assert "^P" not in str(app.query_one("#keys").render())
+
+
+@pytest.mark.asyncio
+async def test_p_in_filter_box_types_a_p():
+    app = SessionPanel(load=lambda v: (SESS, None), actions=FakeActions(), view=ViewState())
+    async with app.run_test(size=(36, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("slash", "p"); await pilot.pause()
+        assert app._filter.value == "p"
