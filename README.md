@@ -72,7 +72,7 @@ session-purge-headless --yes    # delete, then rescan
 
 Favorite prompts live in `${XDG_CONFIG_HOME:-~/.config}/session-panel/prompts.txt` (one per line; `install.sh` seeds it). The palette sends the chosen line to the session pane of the current tab.
 
-Requirements: `zellij` (Mac: `brew install zellij`; Nexus: binary in `~/.local/bin`) and `uv` (the launcher is a PEP 723 script with `textual` as dependency). `install.sh` installs `~/.config/zellij/config.kdl` only if none exists, and warns when `zellij` or `uv` is missing. `sessions --plain` (or a pipe) prints the table instead.
+Requirements: `zellij` (Mac: `brew install zellij`; Nexus: binary in `~/.local/bin`) and `uv` (the launcher is a PEP 723 script with `textual` as dependency). `install.sh` installs `~/.config/zellij/config.kdl` only if none exists — an existing one without the panel keybind gets a warning and the block to paste — and warns when `zellij` or `uv` is missing. The panel refreshes every `SESSION_PANEL_REFRESH` seconds (default 30) without the costly `claude agents` read; `r` does a full refresh. `sessions --plain` (or a pipe) prints the table instead.
 
 **Migration** (`session-migrate`) leaves a single live copy. Source reachable: the JSONL is pulled over ssh, the source copy goes to the trash. Source unreachable (Mac asleep, from Nexus): the replica kept by the Stop hook (`session-replicate`) is used instead; the stale source copy is trashed at its next scan.
 
@@ -101,6 +101,7 @@ Dans cet ordre, sur les deux machines sauf mention contraire :
 4. Relancer `bash install.sh` sur les deux machines — **après** l'étape 3 : c'est lui qui branche le Stop hook à partir de `replica_to`.
 5. Mac et Nexus : installer `zellij` et `uv` (Nexus : binaires dans `~/.local/bin`).
 6. cron (Nexus) et launchd (Mac) : rien à changer.
+7. Fermer les anciennes sessions tmux `cc-*` (`tmux kill-session -t cc-<sujet>`).
 
 ---
 

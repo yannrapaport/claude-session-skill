@@ -165,8 +165,12 @@ ZCFG="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/config.kdl"
 if [ ! -f "$ZCFG" ]; then
   mkdir -p "$(dirname "$ZCFG")"; cp "$INSTALL_DIR/zellij/config.kdl" "$ZCFG"
   echo "✓  Zellij config installed ($ZCFG)"
+elif grep -q "sessions-panel" "$ZCFG"; then
+  echo "✓  Zellij config already binds the sessions panel ($ZCFG)"
 else
-  echo "ℹ️  $ZCFG exists — add the Ctrl Space keybind from $INSTALL_DIR/zellij/config.kdl by hand"
+  echo "⚠  $ZCFG exists but does not bind the sessions panel (sessions-panel)."
+  echo "   Paste this into it (merge into an existing keybinds { shared { … } } if you have one):"
+  sed -n '/^keybinds {/,$p' "$INSTALL_DIR/zellij/config.kdl" | sed 's/^/     /'
 fi
 PROMPTS="${XDG_CONFIG_HOME:-$HOME/.config}/session-panel/prompts.txt"
 [ -f "$PROMPTS" ] || { mkdir -p "$(dirname "$PROMPTS")"; printf '# One prompt per line — sent by the panel palette\n/ai-brain:wrap-up\n/ai-brain:save\n' > "$PROMPTS"; }

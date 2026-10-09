@@ -44,3 +44,18 @@ I="$SCRIPT_DIR/../install.sh"
 CFG_LINE=$(grep -n 'cat > "$CONFIG"' "$I" | head -1 | cut -d: -f1)
 HOOK_LINE=$(grep -n 'session-install-settings' "$I" | grep -v '^[0-9]*:#' | head -1 | cut -d: -f1)
 assert_eq "install.sh: hook wired after the config step" "yes" "$([ "$HOOK_LINE" -gt "$CFG_LINE" ] && echo yes || echo no)"
+
+# M7: existing Zellij config without the panel keybind → explicit warning + the block to paste.
+_Z=$(mktemp -d); mkdir -p "$_Z/zellij"
+_zblock() { (XDG_CONFIG_HOME="$_Z" INSTALL_DIR="$SCRIPT_DIR/.." HOME="$_Z"; \
+  eval "$(sed -n '/^# ── 4c\. Zellij panel/,/^PROMPTS=/p' "$I" | sed '$d')") 2>&1; }
+echo 'keybinds { }' > "$_Z/zellij/config.kdl"
+_o=$(_zblock)
+assert_eq "install.sh: zellij config lacking the keybind → warning" "yes" \
+  "$(case "$_o" in *"⚠"*"sessions-panel"*) echo yes ;; *) echo no ;; esac)"
+assert_eq "install.sh: prints the bind block (Ctrl Space + Alt s)" "yes" \
+  "$(printf '%s' "$_o" | grep -q 'bind "Ctrl Space" "Alt s"' && echo yes || echo no)"
+cp "$SCRIPT_DIR/../zellij/config.kdl" "$_Z/zellij/config.kdl"
+assert_eq "install.sh: zellij config with the keybind → no warning" "no" \
+  "$(case "$(_zblock)" in *"⚠"*) echo yes ;; *) echo no ;; esac)"
+rm -rf "$_Z"
